@@ -155,6 +155,15 @@ def run_subprocess(
         return f"Failed to run {cmd[0]}: {exc}"
 
 
+def cli_path(path: str) -> str:
+    """Return *path* in a form a command-line tool cannot parse as an option.
+
+    Paths come from the agent and are appended as positional arguments, so a
+    value such as ``--log=/some/file`` would otherwise reach the tool as a flag.
+    """
+    return f"./{path}" if path.startswith("-") else path
+
+
 def make_tool_call_id() -> str:
     """Generate a short unique identifier for a tool invocation."""
     return f"tc_{uuid4().hex[:8]}"

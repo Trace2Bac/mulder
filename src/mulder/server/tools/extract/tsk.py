@@ -19,6 +19,7 @@ from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
     TOOL_TIMEOUT,
+    cli_path,
     error_response,
     make_tool_call_id,
     require_binary,
@@ -541,7 +542,11 @@ def run_mmls(image_path: str) -> dict[str, object]:
 
     try:
         proc = subprocess.run(
-            ["mmls", image_path], capture_output=True, text=True, timeout=60, check=False
+            ["mmls", cli_path(image_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return error_response(tc_id, "run_mmls", params, "mmls timed out", error_type="timeout")

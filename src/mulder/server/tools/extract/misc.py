@@ -22,6 +22,7 @@ from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     TOOL_TIMEOUT,
     adaptive_timeout,
+    cli_path,
     error_response,
     make_tool_call_id,
     require_binary,
@@ -633,7 +634,7 @@ def run_strings(target_path: str, min_length: int = 8) -> dict[str, object]:
     """
     return run_cli_tool(
         binary="strings",
-        cmd=["strings", f"-n{min_length}", target_path],
+        cmd=["strings", f"-n{min_length}", cli_path(target_path)],
         tool_name="run_strings",
         params={"target_path": target_path, "min_length": min_length},
         source_name="strings.output",
@@ -663,7 +664,7 @@ def run_clamav(target_path: str) -> dict[str, object]:
 
     try:
         proc = subprocess.run(
-            ["clamscan", "-r", "--no-summary", target_path],
+            ["clamscan", "-r", "--no-summary", cli_path(target_path)],
             capture_output=True,
             text=True,
             timeout=adaptive_timeout(target_path),
@@ -695,7 +696,7 @@ def run_hashdeep(target_path: str) -> dict[str, object]:
     """
     return run_cli_tool(
         binary="hashdeep",
-        cmd=["hashdeep", "-r", "-l", target_path],
+        cmd=["hashdeep", "-r", "-l", cli_path(target_path)],
         tool_name="run_hashdeep",
         params={"target_path": target_path},
         source_name="hashdeep.hashes",
@@ -721,7 +722,7 @@ def run_exiftool(target_path: str = "", file_path: str = "") -> dict[str, object
         target_path = file_path
     return run_cli_tool(
         binary="exiftool",
-        cmd=["exiftool", "-r", target_path],
+        cmd=["exiftool", "-r", cli_path(target_path)],
         tool_name="run_exiftool",
         params={"target_path": target_path},
         source_name="exiftool.metadata",
@@ -789,7 +790,7 @@ def run_ssdeep(target_path: str, recursive: bool = False) -> dict[str, object]:
     cmd = ["ssdeep"]
     if recursive:
         cmd.append("-r")
-    cmd.append(target_path)
+    cmd.append(cli_path(target_path))
 
     return run_cli_tool(
         binary="ssdeep",

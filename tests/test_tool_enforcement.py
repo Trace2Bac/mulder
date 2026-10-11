@@ -3,6 +3,7 @@ executor that runs nothing fails its attempt (issue #164)."""
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -156,7 +157,8 @@ async def test_cli_command_uses_workspace_mcp_config(tmp_path: Path) -> None:
     mcp_json.write_text('{"mcpServers": {"mulder": {"command": "mulder", "args": ["serve"]}}}')
     orch = Orchestrator("/evidence", cwd=str(tmp_path))
     cmd = _cli_args(await _capture_options(orch, CATALOG.single_allowed_tools, ["Bash"]))
-    assert _flag(cmd, "--mcp-config") == [str(mcp_json)]
+    config = json.loads(cmd[cmd.index("--mcp-config") + 1])
+    assert config["mcpServers"]["mulder"]["args"] == ["serve"]
     assert "--strict-mcp-config" in cmd
 
 
@@ -173,17 +175,25 @@ async def test_session_with_case_id_preloads_case_in_mcp_server(tmp_path: Path) 
     servers = cast("dict[str, dict[str, object]]", options.mcp_servers)
     assert servers["mulder"]["command"] == "mulder"
     assert servers["mulder"]["args"] == ["serve", "--case-id", "CASE-230"]
+    assert servers["mulder"]["env"] == {
+        "MULDER_ALLOWED_TOOLS": ",".join(CATALOG.single_allowed_tools)
+    }
     assert servers["other"] == {"command": "other-server"}
     assert options.strict_mcp_config is True
 
 
 @pytest.mark.asyncio()
 async def test_session_without_case_id_keeps_workspace_mcp_config(tmp_path: Path) -> None:
+    """The workspace server entry is kept; only its allowlist env is added."""
     mcp_json = tmp_path / ".mcp.json"
     mcp_json.write_text('{"mcpServers": {"mulder": {"command": "mulder", "args": ["serve"]}}}')
     orch = Orchestrator("/evidence", cwd=str(tmp_path))
     options = await _capture_options(orch, CATALOG.single_allowed_tools, ["Bash"])
-    assert options.mcp_servers == str(mcp_json)
+    servers = cast("dict[str, dict[str, object]]", options.mcp_servers)
+    assert servers["mulder"]["args"] == ["serve"]
+    assert servers["mulder"]["env"] == {
+        "MULDER_ALLOWED_TOOLS": ",".join(CATALOG.single_allowed_tools)
+    }
     assert options.strict_mcp_config is True
 
 

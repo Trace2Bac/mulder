@@ -21,7 +21,7 @@ from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
 from mulder.server.jobs import JobStore, fill_case_id, validate_tool_args
-from mulder.server.tool_access import EXECUTORS, UNTHROTTLED, _registry, tool_access
+from mulder.server.tool_access import EXECUTORS, UNTHROTTLED, may_dispatch, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -665,10 +665,6 @@ _SEQUENTIAL_ONLY: set[str] = {
     "run_bulk_extractor",
 }
 
-# Dispatchers never run inside a batch: a nested one would apply its own,
-# different role check to the tasks it is handed.
-_NOT_BATCHABLE: set[str] = {"run_parallel", "start_extraction_batch"}
-
 
 @mcp.tool()
 @tool_access(EXECUTORS)
@@ -677,7 +673,9 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     Use this when you need to run the same tool on multiple evidence items
     (e.g., extracting 4 archives, running fls on 4 disk images) or any mix
-    of independent tools that can safely execute concurrently.
+    of independent tools that can safely execute concurrently. Only tools
+    your own session may call directly can be run this way; any other task
+    is refused with an error and the rest still run.
 
     Each task specifies a tool name and its arguments.  All tasks execute
     in parallel worker threads bounded by ``max_workers``.  Tools that
@@ -704,10 +702,13 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             if fn is None:
                 results[idx] = {"error": f"Unknown tool: {tool_name}"}
                 return
-            # The server does not know which role is calling, so only tools some
-            # executor may call directly can be dispatched from here.
-            allowed = _registry.get(tool_name)
-            if tool_name in _NOT_BATCHABLE or allowed is None or not (allowed & EXECUTORS):
+            # Only tools the calling session itself may call can be dispatched
+            # from here; a nested dispatcher is held to the same rule.
+            if not may_dispatch(tool_name):
+                logger.warning(
+                    "run_parallel: refusing %s, not in the calling session's allowed tools",
+                    tool_name,
+                )
                 results[idx] = {"error": f"{tool_name} is not available through run_parallel"}
                 return
             arguments = fill_case_id(fn, arguments, open_case_id)

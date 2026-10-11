@@ -32,7 +32,7 @@ from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableErr
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.proxy import ModelSettings, is_proxy_model
 from mulder.orchestrator.types import EffortLevel, PhaseResult, extract_json_from_text
-from mulder.server.tool_access import ALL_ROLES, get_tools_for_role
+from mulder.server.tool_access import ALL_ROLES, ALLOWED_TOOLS_ENV, get_tools_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +433,10 @@ class SessionExecutor:
         the run is pinned to a case (``MULDER_CASE_ID`` in *env*, set by the
         orchestrator) the ``mulder`` server is started with ``--case-id``
         so query tools work before the model calls ``open_case``
-        (issue #230); other servers in ``.mcp.json`` are kept.
+        (issue #230); other servers in ``.mcp.json`` are kept. The ``mulder``
+        entry also carries ``MULDER_ALLOWED_TOOLS`` (this session's
+        allowlist) in its ``env`` so the server can limit what
+        ``run_parallel`` and ``start_extraction_batch`` dispatch.
 
         Args:
             allowed_tools: Role allowlist for this session.
@@ -445,18 +448,32 @@ class SessionExecutor:
             Keyword arguments for ``ClaudeAgentOptions``.
         """
         mcp_config = Path(self._cwd) / ".mcp.json"
-        servers: dict[str, Any] | str = str(mcp_config) if mcp_config.is_file() else {}
+        servers: dict[str, Any] | str = {}
         case_id = self._env.get("MULDER_CASE_ID", "")
-        if case_id:
-            if mcp_config.is_file():
-                servers = dict(json.loads(mcp_config.read_text()).get("mcpServers") or {})
-            else:
-                servers = {}
-            servers["mulder"] = {
-                "type": "stdio",
-                "command": "mulder",
-                "args": ["serve", "--case-id", case_id],
-            }
+        if mcp_config.is_file() or case_id:
+            servers = (
+                dict(json.loads(mcp_config.read_text()).get("mcpServers") or {})
+                if mcp_config.is_file()
+                else {}
+            )
+            if case_id:
+                servers["mulder"] = {
+                    "type": "stdio",
+                    "command": "mulder",
+                    "args": ["serve", "--case-id", case_id],
+                }
+            if "mulder" in servers:
+                # The server cannot see this session's options, so hand it the
+                # allowlist: run_parallel and start_extraction_batch check it
+                # (``may_dispatch``). Set on the entry so it reaches the stdio
+                # child explicitly rather than by inheritance.
+                servers["mulder"] = {
+                    **servers["mulder"],
+                    "env": {
+                        **(servers["mulder"].get("env") or {}),
+                        ALLOWED_TOOLS_ENV: ",".join(allowed_tools),
+                    },
+                }
         return {
             # ``[]`` disables every Claude Code built-in (Read, Grep, Glob,
             # Write, Edit, WebFetch, Task, ...) while MCP tools stay loaded,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -89,6 +90,27 @@ class TestEvidenceValidation:
         )
         assert "error" in result or result.get("status") != "accepted"
         assert "valid_refs" in result
+
+    def test_failed_audit_write_leaves_no_stored_finding(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        """If the audit append fails, no finding may be left behind in the DB."""
+        with (
+            patch.object(audit_log, "log_finding_submission", side_effect=OSError("disk full")),
+            contextlib.suppress(OSError),
+        ):
+            result = _call_submit_finding(
+                case_db,
+                audit_log,
+                title="Suspicious process",
+                description="cmd.exe spawned with network connection",
+                severity="high",
+                confidence="confirmed",
+                evidence_refs=["tc_aabbccdd", "tc_11223344"],
+                sources=["volatility.pslist"],
+            )
+            assert result.get("status") != "accepted"
+        assert case_db.get_findings() == []
 
 
 class TestTimestampSanitization:

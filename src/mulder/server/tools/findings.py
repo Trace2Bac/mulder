@@ -344,8 +344,10 @@ def submit_finding(
             "Consider whether 'inference' is more appropriate."
         )
 
-    # Audit first: a finding in the database without its audit entry has no
-    # provenance chain, while an audit entry without a finding is harmless.
+    # Audit first: if the audit append fails, the tool returns an error and
+    # no finding is stored behind it (otherwise it would reach the report,
+    # and a retry would duplicate it). An audit entry without a finding is
+    # harmless.
     ctx.audit.log_finding_submission(finding_id, evidence_refs)
     ctx.db.insert_finding(finding)
 

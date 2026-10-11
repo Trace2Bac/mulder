@@ -1082,6 +1082,43 @@ def decode_payload(
             "error_message": f"Input too large ({len(data)} chars, max {_MAX_DECODE_INPUT})",
         }
 
+    detected_encoding, layers, decoded = _decode_layers(data, encoding)
+
+    if decoded and len(decoded) > _MAX_DECODE_OUTPUT:
+        decoded = decoded[:_MAX_DECODE_OUTPUT] + f"\n... [truncated at {_MAX_DECODE_OUTPUT} chars]"
+
+    results: dict[str, object] = {
+        "detected_encoding": detected_encoding,
+        "layers": layers,
+        "decoded": decoded,
+        "decoded_length": len(decoded) if decoded else 0,
+    }
+    if extraction_meta:
+        results["extraction"] = extraction_meta
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="decode_payload",
+        params=params,
+        output_hash=hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "results": results,
+    }
+
+
+def _decode_layers(data: str, encoding: str) -> tuple[str, list[dict[str, str]], str | None]:
+    """Decode *data* layer by layer and return ``(detected_encoding, layers, decoded)``.
+
+    Kept separate from the ``decode_payload`` tool so a nested layer can be
+    decoded by calling this function again.  Inside this module the name
+    ``decode_payload`` is bound to the async wrapper ``mcp.tool()`` registers,
+    so calling it directly returns an un-awaited coroutine.
+    """
     data = data.strip()
     decoded: str | None = None
     detected_encoding: str = encoding
@@ -1155,42 +1192,15 @@ def decode_payload(
                 layers.append({"encoding": "base64", "preview": decoded[:_HINT_CHAR_LIMIT]})
                 inner = _detect_encoding(decoded)
                 if inner != "base64" and inner != "unknown":
-                    inner_result = decode_payload(decoded, encoding=inner)
-                    inner_results = inner_result.get("results")
-                    if isinstance(inner_results, dict):
-                        inner_layers = inner_results.get("layers", [])
-                        if inner_layers:
-                            layers.extend(inner_layers)
-                            decoded = inner_results.get("decoded", decoded)
+                    _, inner_layers, inner_decoded = _decode_layers(decoded, inner)
+                    if inner_layers:
+                        layers.extend(inner_layers)
+                        decoded = inner_decoded
 
     else:
         decoded = f"[unknown encoding: {detected_encoding}]"
 
-    if decoded and len(decoded) > _MAX_DECODE_OUTPUT:
-        decoded = decoded[:_MAX_DECODE_OUTPUT] + f"\n... [truncated at {_MAX_DECODE_OUTPUT} chars]"
-
-    results: dict[str, object] = {
-        "detected_encoding": detected_encoding,
-        "layers": layers,
-        "decoded": decoded,
-        "decoded_length": len(decoded) if decoded else 0,
-    }
-    if extraction_meta:
-        results["extraction"] = extraction_meta
-
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="decode_payload",
-        params=params,
-        output_hash=hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-    }
+    return detected_encoding, layers, decoded
 
 
 def _detect_encoding(data: str) -> str:

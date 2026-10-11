@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from mulder.server.app import get_ctx, has_ctx, mcp
 from mulder.server.jobs import fill_case_id, validate_tool_args
-from mulder.server.tool_access import Role, _registry, tool_access
+from mulder.server.tool_access import Role, may_dispatch, tool_access
 
 if TYPE_CHECKING:
     from mulder.server.jobs import JobStore
@@ -28,9 +28,22 @@ from mulder.server.helpers import hash_output, make_tool_call_id, tool_already_i
 
 logger = logging.getLogger(__name__)
 
-# Dispatchers never run inside a batch: a nested one would apply its own,
-# different role check to the tasks it is handed.
-_NOT_BATCHABLE = frozenset({"run_parallel", "start_extraction_batch"})
+
+def _rejection_message(rejected: list[dict[str, Any]], not_available: list[dict[str, Any]]) -> str:
+    """Explain a batch with nothing to submit, keeping the retryable cause apart."""
+    parts = []
+    if rejected:
+        parts.append(
+            f"{len(rejected)} task(s) rejected for invalid arguments. "
+            "Fix the arguments listed in tasks_rejected and resubmit."
+        )
+    if not_available:
+        parts.append(
+            f"{len(not_available)} task(s) are not available to this session through a "
+            "batch (tasks_not_available). Resubmitting will not help: call those tools "
+            "directly if you can, otherwise leave them out."
+        )
+    return " ".join(parts) + " Nothing was submitted."
 
 
 def _get_job_store() -> JobStore:
@@ -49,6 +62,13 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     (Volatility, Plaso, bulk_extractor, fls, EVTX, registry). Tools
     already indexed are auto-skipped. Use run_parallel for fast tools
     (extract_archive, run_mmls, composite tools).
+
+    Only tools your own session may call directly can be queued. Any other
+    task (for example ``update_finding``, ``submit_narrative`` or any tool
+    outside your session's allowed list) is refused and listed in ``tasks_not_available``; the rest
+    are still submitted. Do not resubmit a refused task: call the tool
+    directly if you can, otherwise leave it out. Tasks with bad arguments are
+    listed in ``tasks_rejected`` and may be fixed and resubmitted.
 
     Returns a batch_id for tracking. Poll with
     check_extraction_status(batch_id) and retrieve results with
@@ -97,20 +117,21 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     tasks_to_submit: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    not_available: list[dict[str, Any]] = []
 
     open_case_id = get_ctx().case_id if has_ctx() else None
 
     for task in tasks:
         tool_name = task["tool"]
-        # The server does not know which role is calling, so only tools a role
-        # that may start a batch could also call directly are accepted.
-        allowed = _registry.get(tool_name, Role(0))
-        if tool_name in _NOT_BATCHABLE or not (allowed & _registry["start_extraction_batch"]):
-            logger.warning("Rejecting %s in batch: not available to batch callers", tool_name)
-            rejected.append(
+        # Only tools the calling session itself may call can be queued; a
+        # nested dispatcher is held to the same rule.
+        if not may_dispatch(tool_name):
+            logger.warning(
+                "Refusing %s in batch: not in the calling session's allowed tools", tool_name
+            )
+            not_available.append(
                 {
                     "tool": tool_name,
-                    "args": task.get("args", {}),
                     "error": f"{tool_name} is not available through start_extraction_batch",
                 }
             )
@@ -157,22 +178,29 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 tool_call_id=tc_id,
                 tool_name="start_extraction_batch",
                 params={"tasks": [t["tool"] for t in tasks]},
-                output_hash=hash_output({"status": "all_skipped", "rejected": rejected}),
+                output_hash=hash_output(
+                    {
+                        "status": "all_skipped",
+                        "rejected": rejected,
+                        "not_available": not_available,
+                    }
+                ),
                 duration_ms=elapsed,
             )
         except RuntimeError:
             logger.warning("Audit skipped: no active case context for start_extraction_batch")
-        if rejected:
-            return {
+        if rejected or not_available:
+            response: dict[str, Any] = {
                 "tool_call_id": tc_id,
                 "status": "error",
-                "error_message": (
-                    f"{len(rejected)} task(s) rejected; nothing submitted. "
-                    "Fix the tasks listed in tasks_rejected and resubmit."
-                ),
-                "tasks_rejected": rejected,
+                "error_message": _rejection_message(rejected, not_available),
                 "tasks_skipped": skipped,
             }
+            if rejected:
+                response["tasks_rejected"] = rejected
+            if not_available:
+                response["tasks_not_available"] = not_available
+            return response
         return {
             "tool_call_id": tc_id,
             "status": "all_skipped",
@@ -215,8 +243,16 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     if rejected:
         result["tasks_rejected"] = rejected
         result["hint"] = (
-            f"{len(rejected)} task(s) were NOT submitted; tasks_rejected gives the reason "
-            "for each. Resubmit those with the accepted parameter names. " + result["hint"]
+            f"{len(rejected)} task(s) were NOT submitted because their arguments do not "
+            "match the tool signature (see tasks_rejected). Resubmit those with the "
+            "accepted parameter names. " + result["hint"]
+        )
+    if not_available:
+        result["tasks_not_available"] = not_available
+        result["hint"] = (
+            f"{len(not_available)} task(s) were NOT submitted because this session may not "
+            "run those tools through a batch (see tasks_not_available). Do not resubmit them: "
+            "call them directly if you can, otherwise leave them out. " + result["hint"]
         )
     return result
 

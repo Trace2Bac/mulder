@@ -14,7 +14,6 @@ from mulder.server.jobs import (
     fill_case_id,
     validate_tool_args,
 )
-from mulder.server.tool_access import EXECUTORS
 
 
 def _noop_dispatch(**kwargs: object) -> dict[str, str]:
@@ -378,7 +377,6 @@ class TestBatchRejectsBadArgs:
         store = JobStore(max_workers=2, tool_dispatch=dispatch)
         with (
             patch("mulder.server.app._tool_dispatch_sync", dispatch),
-            patch.dict("mulder.server.tool_access._registry", dict.fromkeys(dispatch, EXECUTORS)),
             patch("mulder.server.app.get_job_store", return_value=store),
             patch("mulder.server.tools.jobs.tool_already_indexed", return_value=None),
         ):
@@ -408,7 +406,6 @@ class TestBatchRejectsBadArgs:
         store = JobStore(max_workers=1, tool_dispatch=dispatch)
         with (
             patch("mulder.server.app._tool_dispatch_sync", dispatch),
-            patch.dict("mulder.server.tool_access._registry", dict.fromkeys(dispatch, EXECUTORS)),
             patch("mulder.server.app.get_job_store", return_value=store),
         ):
             result = start_extraction_batch([{"tool": "typed_tool", "args": {}}])
@@ -498,7 +495,6 @@ class TestBatchFillsCaseId:
         _case_calls.clear()
         with (
             patch("mulder.server.app._tool_dispatch_sync", dispatch),
-            patch.dict("mulder.server.tool_access._registry", dict.fromkeys(dispatch, EXECUTORS)),
             patch("mulder.server.app.get_job_store", return_value=store),
             patch("mulder.server.app._ctx", _open_case("case-1")),
             patch("mulder.server.tools.jobs.tool_already_indexed", return_value=None),
@@ -535,7 +531,6 @@ class TestBatchFillsCaseId:
         store = JobStore(max_workers=1, tool_dispatch=dispatch)
         with (
             patch("mulder.server.app._tool_dispatch_sync", dispatch),
-            patch.dict("mulder.server.tool_access._registry", dict.fromkeys(dispatch, EXECUTORS)),
             patch("mulder.server.app.get_job_store", return_value=store),
             patch("mulder.server.app._ctx", None),
         ):

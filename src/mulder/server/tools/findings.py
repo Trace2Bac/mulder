@@ -292,8 +292,10 @@ def submit_finding(
     """Record a forensic finding with validated evidence references and metadata.
 
     Call after discovering evidence worth reporting. Every evidence_ref
-    must be a tool_call_id from a prior tool invocation (validated against
-    the audit log). The evidence_ref must be from a tool call whose output
+    must be the tool_call_id of a prior call that succeeded (validated
+    against the audit log). The id of a failed call, or of a call to a
+    findings, narrative or report tool, is refused. The evidence_ref must
+    be from a tool call whose output
     you directly examined and that specifically supports this finding's
     claims. Citing a tool_call_id from a search you did not review is
     insufficient.
@@ -438,7 +440,8 @@ def update_finding(
         description: New/appended description (optional).
         severity: New severity level (optional).
         confidence: New confidence level (optional).
-        evidence_refs: New evidence refs list (optional).
+        evidence_refs: New evidence refs list (optional). Each must be the
+            tool_call_id of a prior successful call, as for submit_finding.
         sources: New sources list (optional).
         mitre_attack_ids: New ATT&CK IDs (optional).
         event_time_start: New start time (optional).

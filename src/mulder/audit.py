@@ -10,7 +10,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from mulder.models import (
     AuditSummary,
@@ -130,7 +130,7 @@ class AuditLog:
         duration_ms: float = 0,
         sub_calls: list[str] | None = None,
         batch_id: str | None = None,
-        status: str | None = None,
+        status: Literal["error"] | None = None,
     ) -> None:
         """Record a tool invocation as one JSONL line and index ``tool_call_id``.
 

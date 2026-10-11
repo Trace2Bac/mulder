@@ -22,6 +22,11 @@ from mulder.models import (
 if TYPE_CHECKING:
     from mulder.db import CaseDB
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows; mulder is Linux-first
+    fcntl = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _COST_PER_MTOK_INPUT = 3.0
@@ -116,6 +121,12 @@ class AuditLog:
         with self._lock:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._log_path, "ab+") as fh:
+                # Several ``mulder serve`` processes append to one file. Take
+                # an exclusive lock so the last-byte check below cannot see
+                # another process's append half-written and wrongly insert a
+                # blank line into a healthy log.
+                if fcntl is not None:
+                    fcntl.flock(fh, fcntl.LOCK_EX)
                 # A writer that died mid-line leaves no trailing newline; end
                 # that fragment first so this entry is not glued onto it.
                 if fh.seek(0, os.SEEK_END) > 0:

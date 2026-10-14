@@ -344,8 +344,12 @@ def submit_finding(
             "Consider whether 'inference' is more appropriate."
         )
 
-    ctx.db.insert_finding(finding)
+    # Audit first: if the audit append fails, the tool returns an error and
+    # no finding is stored behind it (otherwise it would reach the report,
+    # and a retry would duplicate it). An audit entry without a finding is
+    # harmless.
     ctx.audit.log_finding_submission(finding_id, evidence_refs)
+    ctx.db.insert_finding(finding)
 
     result: dict[str, object] = {
         "tool_call_id": tc_id,

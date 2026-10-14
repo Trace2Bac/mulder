@@ -13,21 +13,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mulder.extractors.classifier import EvidenceClassifier
+
 logger = logging.getLogger(__name__)
 
 _consecutive_extraction_failures: int = 0
 _consecutive_cross_system_failures: int = 0
+_catalog_coverage_reprompts: int = 0
 
 
 def reset_gate_failure_counters() -> None:
-    """Reset consecutive failure counters for extraction and cross-system gates.
+    """Reset gate retry counters.
 
     Call between investigations or in test fixtures to ensure gate state
     does not leak across runs.
     """
     global _consecutive_extraction_failures, _consecutive_cross_system_failures  # noqa: PLW0603
+    global _catalog_coverage_reprompts  # noqa: PLW0603
     _consecutive_extraction_failures = 0
     _consecutive_cross_system_failures = 0
+    _catalog_coverage_reprompts = 0
 
 
 @dataclass
@@ -62,7 +67,10 @@ class GateResult:
     gaps: list[str] = field(default_factory=list)
 
 
-def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
+def validate_catalog(
+    catalog_json: dict[str, Any],
+    evidence_path: str | None = None,
+) -> GateResult:
     """Validate that the catalog phase produced structured JSON output.
 
     The catalog agent must emit a final JSON message containing
@@ -70,13 +78,24 @@ def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
     This gate validates that structure directly rather than scanning
     assistant text for keywords.
 
+    Fewer systems than disk images prompts one coverage check (#237), then
+    becomes advisory: one host can have multiple disks or image formats.
+    The classifier recognises several disk-image extensions; EWF segments
+    after ``.E01`` are ignored. Ambiguous ``.img`` memory dumps are excluded,
+    as are the classifier's memory dumps and split archive parts.
+
     Args:
         catalog_json: Parsed JSON from the catalog agent's final message,
             or an empty dict if parsing failed.
+        evidence_path: Evidence directory to count disk images in. When
+            omitted, or when it cannot be classified, the image-count
+            check is skipped with a warning rather than failing.
 
     Returns:
         GateResult indicating whether the catalog output is valid.
     """
+    global _catalog_coverage_reprompts  # noqa: PLW0603
+
     checks: list[GateCheck] = []
     gaps: list[str] = []
 
@@ -119,6 +138,46 @@ def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
             "Catalog JSON must include a non-empty 'systems' array. "
             "Each entry needs at minimum a 'name' field."
         )
+
+    if check_systems.passed and evidence_path:
+        root = Path(evidence_path)
+        try:
+            images = sorted(
+                str(e.path.relative_to(root.resolve()))
+                for e in EvidenceClassifier().classify(root)
+                if e.artifact_type == "disk_image" and e.path.suffix.lower() != ".img"
+            )
+        except Exception:
+            logger.warning("Catalog gate: cannot classify %s", evidence_path, exc_info=True)
+            images = None
+        if images is None:
+            detail = "Evidence could not be classified; disk image count not verified"
+            logger.warning("Catalog gate: %s", detail)
+            checks.append(GateCheck(name="images_covered", passed=True, detail=detail))
+        else:
+            covered = system_count >= len(images)
+            advisory = not covered and _catalog_coverage_reprompts >= 1
+            checks.append(
+                GateCheck(
+                    name="images_covered",
+                    passed=covered or advisory,
+                    detail=f"{system_count} system(s) for {len(images)} disk image(s)",
+                )
+            )
+            if not covered:
+                _catalog_coverage_reprompts += 1
+                gaps.append(
+                    ("ADVISORY: " if advisory else "")
+                    + (
+                        f"Catalog registered {system_count} system(s) but the evidence "
+                        f"contains {len(images)} disk image(s). Confirm every listed image "
+                        "is accounted for by a system. Keep multiple disks, segments, or "
+                        "formats belonging to the same host under one system. Images: "
+                    )
+                    + ", ".join(images)
+                )
+            else:
+                _catalog_coverage_reprompts = 0
 
     return GateResult(
         passed=all(c.passed for c in checks),

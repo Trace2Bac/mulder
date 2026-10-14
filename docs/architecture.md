@@ -202,7 +202,10 @@ The retry system is bounded: each phase allows up to 2 retries (configurable), a
 ### Phase Gates
 
 Extraction, cross-system, and narrative gates read the database directly.
-The catalog gate validates the final JSON's structure, and the report gate checks
+The catalog gate validates the final JSON's structure and checks disk-image
+coverage. If there are fewer systems than images, it re-prompts once, then passes
+with an advisory: several disks or image formats can belong to one host.
+Ambiguous `.img` memory dumps are excluded from this count. The report gate checks
 the recorded tool names. Gate validation does not require an LLM utility query.
 
 ```mermaid

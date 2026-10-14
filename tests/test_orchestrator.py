@@ -46,6 +46,43 @@ class TestOrchestratorInit:
         assert orch.model_config.analyst == "custom-analyst"
 
 
+@pytest.mark.asyncio()
+async def test_catalog_image_coverage_reprompts_once_then_proceeds(tmp_path: Path) -> None:
+    """Exercise the real gate wiring and retry loop for a valid multi-disk host."""
+    from mulder.orchestrator.phases import CATALOG
+
+    for name in ("host-disk0.E01", "host-disk1.E01"):
+        (tmp_path / name).touch()
+    orch = _make_orchestrator(evidence_path=str(tmp_path), cwd=str(tmp_path), db_dir=tmp_path)
+    prompts: list[str] = []
+
+    async def execute(**kwargs: object) -> PhaseResult:
+        prompts.append(str(kwargs["prompt"]))
+        return PhaseResult(
+            phase_name="catalog",
+            messages=[
+                json.dumps(
+                    {
+                        "case_id": "test-case",
+                        "evidence_root": str(tmp_path),
+                        "systems": [{"name": "host"}],
+                    }
+                )
+            ],
+            turns_used=1,
+        )
+
+    with patch.object(orch._session, "execute", side_effect=execute):
+        result = await orch._run_single_phase(CATALOG)
+
+    assert result.success
+    assert len(prompts) == 2
+    assert "host-disk0.E01" in prompts[1] and "host-disk1.E01" in prompts[1]
+    assert "same host under one system" in prompts[1]
+    assert result.gate_result is not None
+    assert result.gate_result.gaps[0].startswith("ADVISORY:")
+
+
 class TestSplitPhaseHappyPath:
     """Split-mode phase planner -> executor -> analyst pipeline."""
 

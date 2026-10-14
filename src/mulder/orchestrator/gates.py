@@ -19,17 +19,20 @@ logger = logging.getLogger(__name__)
 
 _consecutive_extraction_failures: int = 0
 _consecutive_cross_system_failures: int = 0
+_catalog_coverage_reprompts: int = 0
 
 
 def reset_gate_failure_counters() -> None:
-    """Reset consecutive failure counters for extraction and cross-system gates.
+    """Reset gate retry counters.
 
     Call between investigations or in test fixtures to ensure gate state
     does not leak across runs.
     """
     global _consecutive_extraction_failures, _consecutive_cross_system_failures  # noqa: PLW0603
+    global _catalog_coverage_reprompts  # noqa: PLW0603
     _consecutive_extraction_failures = 0
     _consecutive_cross_system_failures = 0
+    _catalog_coverage_reprompts = 0
 
 
 @dataclass
@@ -75,10 +78,11 @@ def validate_catalog(
     This gate validates that structure directly rather than scanning
     assistant text for keywords.
 
-    A disk image is a distinct system, so ``systems`` must also have at
-    least one entry per disk image in the evidence set (#237). EWF
-    segments count once: the classifier only recognises ``.E01``, and
-    split ``.7z.001`` parts and memory dumps are not disk images.
+    Fewer systems than disk images prompts one coverage check (#237), then
+    becomes advisory: one host can have multiple disks or image formats.
+    The classifier recognises several disk-image extensions; EWF segments
+    after ``.E01`` are ignored. Ambiguous ``.img`` memory dumps are excluded,
+    as are the classifier's memory dumps and split archive parts.
 
     Args:
         catalog_json: Parsed JSON from the catalog agent's final message,
@@ -90,6 +94,8 @@ def validate_catalog(
     Returns:
         GateResult indicating whether the catalog output is valid.
     """
+    global _catalog_coverage_reprompts  # noqa: PLW0603
+
     checks: list[GateCheck] = []
     gaps: list[str] = []
 
@@ -139,7 +145,7 @@ def validate_catalog(
             images = sorted(
                 str(e.path.relative_to(root.resolve()))
                 for e in EvidenceClassifier().classify(root)
-                if e.artifact_type == "disk_image"
+                if e.artifact_type == "disk_image" and e.path.suffix.lower() != ".img"
             )
         except Exception:
             logger.warning("Catalog gate: cannot classify %s", evidence_path, exc_info=True)
@@ -150,19 +156,28 @@ def validate_catalog(
             checks.append(GateCheck(name="images_covered", passed=True, detail=detail))
         else:
             covered = system_count >= len(images)
+            advisory = not covered and _catalog_coverage_reprompts >= 1
             checks.append(
                 GateCheck(
                     name="images_covered",
-                    passed=covered,
+                    passed=covered or advisory,
                     detail=f"{system_count} system(s) for {len(images)} disk image(s)",
                 )
             )
             if not covered:
+                _catalog_coverage_reprompts += 1
                 gaps.append(
-                    f"Catalog registered {system_count} system(s) but the evidence "
-                    f"contains {len(images)} disk image(s). Each disk image is a "
-                    "distinct system: register one system per image. Images: " + ", ".join(images)
+                    ("ADVISORY: " if advisory else "")
+                    + (
+                        f"Catalog registered {system_count} system(s) but the evidence "
+                        f"contains {len(images)} disk image(s). Confirm every listed image "
+                        "is accounted for by a system. Keep multiple disks, segments, or "
+                        "formats belonging to the same host under one system. Images: "
+                    )
+                    + ", ".join(images)
                 )
+            else:
+                _catalog_coverage_reprompts = 0
 
     return GateResult(
         passed=all(c.passed for c in checks),

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mulder.orchestrator.gates import (
+    reset_gate_failure_counters,
     validate_catalog,
     validate_cross_system,
     validate_extraction,
@@ -123,7 +126,7 @@ def _touch(root: Path, *names: str) -> None:
 
 
 class TestValidateCatalogImageCount:
-    """One system per distinct disk image, or the gate fails (#237)."""
+    """Check image coverage once without equating images with hosts (#237)."""
 
     def test_fewer_systems_than_images_fails_listing_images(self, tmp_path: Path) -> None:
         _touch(tmp_path, "pc.E01", "pc.E02", "rm1.E01", "rm2.E01", "rm3.E01")
@@ -135,6 +138,8 @@ class TestValidateCatalogImageCount:
         for name in ("pc.E01", "rm1.E01", "rm2.E01", "rm3.E01"):
             assert name in gap
         assert "pc.E02" not in gap
+        assert "Keep multiple disks" in gap
+        assert "register one system per image" not in gap
 
     def test_one_system_per_image_passes(self, tmp_path: Path) -> None:
         _touch(tmp_path, "pc.E01", "rm1.E01", "rm2.E01", "rm3.E01")
@@ -146,10 +151,34 @@ class TestValidateCatalogImageCount:
         assert validate_catalog(_catalog("pc"), str(tmp_path)).passed
 
     def test_memory_dump_is_not_a_system(self, tmp_path: Path) -> None:
-        _touch(tmp_path, "pc.E01", "pc-memory.mem", "capture.pcap", "notes.7z.001")
+        _touch(
+            tmp_path, "pc.E01", "pc-memory.mem", "pc-memory.IMG", "capture.pcap", "notes.7z.001"
+        )
         assert validate_catalog(_catalog("pc"), str(tmp_path)).passed
 
-    def test_unreadable_evidence_warns_instead_of_failing(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "images",
+        [("pc-disk0.E01", "pc-disk1.E01"), ("pc.vmdk", "pc-flat.vmdk"), ("pc.E01", "pc.dd")],
+    )
+    def test_multiple_images_of_one_host_become_advisory(
+        self, tmp_path: Path, images: tuple[str, str]
+    ) -> None:
+        _touch(tmp_path, *images)
+        assert not validate_catalog(_catalog("pc"), str(tmp_path)).passed
+        for _ in range(2):
+            result = validate_catalog(_catalog("pc"), str(tmp_path))
+            assert result.passed
+            assert result.gaps[0].startswith("ADVISORY:")
+
+        # An advisory image count must not bypass required catalog fields.
+        invalid = _catalog("pc")
+        del invalid["case_id"]
+        assert not validate_catalog(invalid, str(tmp_path)).passed
+
+        reset_gate_failure_counters()
+        assert not validate_catalog(_catalog("pc"), str(tmp_path)).passed
+
+    def test_missing_evidence_warns_instead_of_failing(self, tmp_path: Path) -> None:
         result = validate_catalog(_catalog("pc"), str(tmp_path / "missing"))
         assert result.passed
         check = next(c for c in result.checks if c.name == "images_covered")

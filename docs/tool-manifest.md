@@ -996,7 +996,7 @@ Search all ingested evidence for keywords or regex patterns.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | query | str | no | Search term or regex pattern |
-| source | str \| None | no | Source name or prefix to scope the search |
+| source | str \| list[str] \| None | no | Source name/prefix, or a list matching any listed source; an empty list applies no source-name filter |
 | max_results | int | no | Maximum matching windows (default 50) |
 | regex | bool | no | Treat query as regex (default False) |
 | t_start | str \| None | no | ISO 8601 start time filter |

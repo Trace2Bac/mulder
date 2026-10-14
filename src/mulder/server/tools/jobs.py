@@ -99,12 +99,13 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     for task in tasks:
         tool_name = task["tool"]
         args = fill_case_id(_tool_dispatch_sync[tool_name], task.get("args", {}), open_case_id)
-        task = {**task, "args": args}
-        problem = validate_tool_args(_tool_dispatch_sync[tool_name], args)
-        if problem is not None:
-            logger.warning("Rejecting %s in batch: %s", tool_name, problem)
-            rejected.append({"tool": tool_name, "args": args, "error": problem})
+        validated = validate_tool_args(_tool_dispatch_sync[tool_name], args)
+        if isinstance(validated, str):
+            logger.warning("Rejecting %s in batch: %s", tool_name, validated)
+            rejected.append({"tool": tool_name, "args": args, "error": validated})
             continue
+        args = validated
+        task = {**task, "args": args}
         force = args.get("force", False)
         if not force:
             evidence_path = (

@@ -329,7 +329,8 @@ def search(
     Args:
         query: Search term (substring match) or regex pattern.
         source: Optional source name or prefix to scope the search, or a
-            list of them to search any of those sources.
+            list of them to search any of those sources. An empty list
+            applies no source-name filter.
         max_results: Maximum number of matching windows to return.
         regex: If True, treat *query* as a Python regex pattern.
         t_start: Optional ISO 8601 start time to filter results.
@@ -345,25 +346,8 @@ def search(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    if isinstance(exclude_sources, str):
-        exclude_sources = [exclude_sources]
-    if any(
-        v is not None
-        and not (
-            isinstance(v, str) or (isinstance(v, list) and all(isinstance(n, str) for n in v))
-        )
-        for v in (source, exclude_sources)
-    ):
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_type": "invalid_params",
-            "error_message": (
-                "source and exclude_sources must be a source name string or a list of them."
-            ),
-            "results": [],
-            "result_count": 0,
-        }
+    if source == []:
+        source = None
 
     # A list of sources means "any of these"; resolve it to source ids the
     # same way evidence_path does, and stop passing a name down to the DB.

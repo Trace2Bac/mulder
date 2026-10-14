@@ -26,6 +26,9 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import uuid4
 
+from mcp.server.mcpserver.utilities.func_metadata import func_metadata
+from pydantic import ValidationError
+
 from mulder.server.timeouts import should_defer
 
 logger = logging.getLogger(__name__)
@@ -75,8 +78,8 @@ def _extract_error_detail(result: object, fallback: str = "unknown error") -> st
     return fallback
 
 
-def validate_tool_args(fn: Callable[..., Any], args: dict[str, Any]) -> str | None:
-    """Return why *args* cannot be passed as ``fn(**args)``, or None if they can.
+def validate_tool_args(fn: Callable[..., Any], args: dict[str, Any]) -> dict[str, Any] | str:
+    """Return MCP-validated arguments, or an actionable validation error.
 
     Planner-generated task args reach tool functions by name, so a wrong
     keyword would otherwise surface as a bare ``TypeError`` in the worker.
@@ -85,21 +88,26 @@ def validate_tool_args(fn: Callable[..., Any], args: dict[str, Any]) -> str | No
     """
     params = inspect.signature(fn).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        return None
+        return dict(args)
     keyword_kinds = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     accepted = [n for n, p in params.items() if p.kind in keyword_kinds]
     unexpected = sorted(set(args) - set(accepted))
     missing = [
         n for n in accepted if params[n].default is inspect.Parameter.empty and n not in args
     ]
-    if not unexpected and not missing:
-        return None
     problems = []
     if unexpected:
         problems.append("unexpected parameter(s) " + ", ".join(repr(n) for n in unexpected))
     if missing:
         problems.append("missing required parameter(s) " + ", ".join(repr(n) for n in missing))
-    return "; ".join(problems) + "; accepted: " + ", ".join(accepted)
+    if problems:
+        return "; ".join(problems) + "; accepted: " + ", ".join(accepted)
+    try:
+        validated = func_metadata(fn, structured_output=False).validate_arguments(args)
+    except ValidationError as exc:
+        return str(exc)
+    # Preserve omitted defaults for wrappers that distinguish explicitly supplied args.
+    return {name: validated[name] for name in args}
 
 
 def fill_case_id(

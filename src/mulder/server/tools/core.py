@@ -294,7 +294,7 @@ def _search_fts(
 )
 def search(
     query: str = "",
-    source: str | None = None,
+    source: str | list[str] | None = None,
     max_results: int = 50,
     regex: bool = False,
     t_start: str | None = None,
@@ -328,7 +328,9 @@ def search(
 
     Args:
         query: Search term (substring match) or regex pattern.
-        source: Optional source name or prefix to scope the search.
+        source: Optional source name or prefix to scope the search, or a
+            list of them to search any of those sources. An empty list
+            applies no source-name filter.
         max_results: Maximum number of matching windows to return.
         regex: If True, treat *query* as a Python regex pattern.
         t_start: Optional ISO 8601 start time to filter results.
@@ -344,9 +346,18 @@ def search(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
+    if source == []:
+        source = None
+
+    # A list of sources means "any of these"; resolve it to source ids the
+    # same way evidence_path does, and stop passing a name down to the DB.
     source_ids: list[int] | None = None
-    if evidence_path is not None:
-        source_ids = [s.source_id for s in _matching_sources(source, evidence_path)]
+    source_name = None if isinstance(source, list) else source
+    if isinstance(source, list) or evidence_path is not None:
+        names = source if isinstance(source, list) else [source_name]
+        source_ids = sorted(
+            {s.source_id for n in names for s in _matching_sources(n, evidence_path)}
+        )
 
     all_terms: list[str] = list(queries) if queries else []
     if query:
@@ -362,7 +373,14 @@ def search(
 
     if regex:
         outcome = _search_regex(
-            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results, source_ids
+            ctx.db,
+            all_terms,
+            source_name,
+            exclude_sources,
+            t_start,
+            t_end,
+            max_results,
+            source_ids,
         )
         if isinstance(outcome, dict):
             outcome["tool_call_id"] = tc_id
@@ -370,7 +388,14 @@ def search(
         results, total_matches = outcome
     else:
         results, total_matches = _search_fts(
-            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results, source_ids
+            ctx.db,
+            all_terms,
+            source_name,
+            exclude_sources,
+            t_start,
+            t_end,
+            max_results,
+            source_ids,
         )
 
     path_by_id = {s.source_id: s.source_path for s in ctx.db.get_sources()}

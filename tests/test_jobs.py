@@ -345,8 +345,11 @@ def _typed_tool(
 
 class TestValidateToolArgs:
     def test_valid_args_pass(self) -> None:
-        assert validate_tool_args(_typed_tool, {"target_path": "/x"}) is None
-        assert validate_tool_args(_typed_tool, {"target_path": "/x", "ruleset": "custom"}) is None
+        args = {"target_path": "/x"}
+        assert validate_tool_args(_typed_tool, args) == args
+        assert args == {"target_path": "/x"}
+        args = {"target_path": "/x", "ruleset": "custom"}
+        assert validate_tool_args(_typed_tool, args) == args
 
     def test_unknown_param_names_accepted(self) -> None:
         msg = validate_tool_args(_typed_tool, {"image_path": "/x", "target_path": "/x"})
@@ -360,7 +363,12 @@ class TestValidateToolArgs:
         )
 
     def test_var_keyword_accepts_anything(self) -> None:
-        assert validate_tool_args(_noop_dispatch, {"anything": 1}) is None
+        assert validate_tool_args(_noop_dispatch, {"anything": 1}) == {"anything": 1}
+
+    def test_wrong_type_is_rejected(self) -> None:
+        error = validate_tool_args(_typed_tool, {"target_path": ["/x"]})
+        assert isinstance(error, str)
+        assert "target_path" in error
 
 
 class TestBatchRejectsBadArgs:

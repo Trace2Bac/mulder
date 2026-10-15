@@ -110,8 +110,16 @@ jobs:
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/assets/assets.lock'
 
   container:
-    name: Container build
-    runs-on: ubuntu-latest
+    name: Build container (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
 
@@ -128,12 +136,14 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           push: false
           load: true
           tags: mulder:ci-smoke
-          cache-from: type=gha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
+          cache-from: |
+            type=gha,scope=container-${{ matrix.arch }}
+            type=gha,scope=buildkit
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope=container-{0}', matrix.arch) || '' }}
 
       - name: Report container size and layers
         run: |
@@ -146,3 +156,15 @@ jobs:
         run: |
           docker run --rm -i --pull=never --network none mulder:ci-smoke \
             python3 - < scripts/container-smoke.py
+
+  container-check:
+    # Preserve the existing required status check, covering both architectures.
+    name: Container build
+    needs: container
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require both platform builds and smoke tests
+        env:
+          RESULT: ${{ needs.container.result }}
+        run: test "$RESULT" = success

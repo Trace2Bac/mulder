@@ -88,6 +88,20 @@ def _get_source_samples(db: CaseDB, source_name: str) -> list[str]:
     return samples
 
 
+def _path_forms(value: str | Path) -> set[Path]:
+    """A path as written (made absolute) and with symlinks and ``..`` resolved.
+
+    The audit log keeps tool arguments as the model passed them, while the
+    evidence list holds paths under the resolved evidence root, so either
+    side may name a symlink.
+    """
+    path = Path(value).absolute()
+    try:
+        return {path, path.resolve()}
+    except (OSError, RuntimeError, ValueError):
+        return {path}
+
+
 @mcp.tool()
 @tool_access(Role.NARRATIVE_PLANNER | Role.NARRATIVE_ANALYST | Role.REPORT)
 def audit_evidence_coverage() -> dict[str, object]:
@@ -211,16 +225,21 @@ def audit_tool_coverage() -> dict[str, object]:
     classifier = EvidenceClassifier(ClassifierConfig())
     classified = classifier.classify(evidence_root)
 
-    evidence = [ev.path.absolute() for ev in classified if ev.artifact_type in _EVIDENCE_TOOL_MAP]
+    evidence = [
+        form
+        for ev in classified
+        if ev.artifact_type in _EVIDENCE_TOOL_MAP
+        for form in _path_forms(ev.path)
+    ]
     targets: dict[str, set[Path]] = defaultdict(set)
     for entry in ctx.audit.tool_call_entries():
         params = entry.get("params")
         hits = targets[str(entry.get("tool_name"))]
         for value in params.values() if isinstance(params, dict) else ():
             if isinstance(value, str) and value:
-                path = Path(value).absolute()
-                if any(e.is_relative_to(path) for e in evidence):
-                    hits.add(path)
+                for path in _path_forms(value):
+                    if any(e.is_relative_to(path) for e in evidence):
+                        hits.add(path)
 
     items: list[dict[str, object]] = []
     total_gaps = 0
@@ -230,11 +249,12 @@ def audit_tool_coverage() -> dict[str, object]:
         if not applicable:
             continue
 
-        item = ev.path.absolute()
+        forms = _path_forms(ev.path)
         run = [
             t
             for t in applicable
-            if t in targets and (not targets[t] or any(item.is_relative_to(p) for p in targets[t]))
+            if t in targets
+            and (not targets[t] or any(f.is_relative_to(p) for f in forms for p in targets[t]))
         ]
         not_run = [t for t in applicable if t not in run]
         total_gaps += len(not_run)

@@ -178,7 +178,9 @@ def audit_tool_coverage() -> dict[str, object]:
 
     Call before finalize_report to ensure no applicable analysis was
     skipped. Re-classifies the evidence directory and compares applicable
-    tools against the audit log.
+    tools against the audit log. A tool counts as run for an evidence item
+    only when a logged call names that item (or a directory holding it); a
+    tool whose calls name no evidence item counts as run for every item.
 
     Returns per-evidence-item tool coverage with tools_run and
     tools_not_run lists, plus total_gaps count.
@@ -209,8 +211,16 @@ def audit_tool_coverage() -> dict[str, object]:
     classifier = EvidenceClassifier(ClassifierConfig())
     classified = classifier.classify(evidence_root)
 
-    audit_summary = ctx.audit.summary()
-    tools_invoked = set(audit_summary.tool_call_counts.keys())
+    evidence = [ev.path.absolute() for ev in classified if ev.artifact_type in _EVIDENCE_TOOL_MAP]
+    targets: dict[str, set[Path]] = defaultdict(set)
+    for entry in ctx.audit.tool_call_entries():
+        params = entry.get("params")
+        hits = targets[str(entry.get("tool_name"))]
+        for value in params.values() if isinstance(params, dict) else ():
+            if isinstance(value, str) and value:
+                path = Path(value).absolute()
+                if any(e.is_relative_to(path) for e in evidence):
+                    hits.add(path)
 
     items: list[dict[str, object]] = []
     total_gaps = 0
@@ -220,8 +230,13 @@ def audit_tool_coverage() -> dict[str, object]:
         if not applicable:
             continue
 
-        run = [t for t in applicable if t in tools_invoked]
-        not_run = [t for t in applicable if t not in tools_invoked]
+        item = ev.path.absolute()
+        run = [
+            t
+            for t in applicable
+            if t in targets and (not targets[t] or any(item.is_relative_to(p) for p in targets[t]))
+        ]
+        not_run = [t for t in applicable if t not in run]
         total_gaps += len(not_run)
 
         items.append(

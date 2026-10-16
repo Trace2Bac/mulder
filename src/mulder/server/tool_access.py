@@ -8,6 +8,7 @@ tool list maintenance.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from enum import Flag, auto
 from typing import TypeVar
@@ -76,3 +77,25 @@ def tool_access(*roles: Role, unthrottled: bool = False) -> Callable[[F], F]:
 def get_tools_for_role(role: Role) -> list[str]:
     """Return sorted MCP tool names accessible by a given role."""
     return sorted(f"mcp__mulder__{name}" for name, allowed in _registry.items() if role & allowed)
+
+
+#: Env var carrying the calling session's allowed tool names (comma-separated,
+#: fully qualified ``mcp__mulder__<tool>``). The orchestrator sets it on the
+#: ``mulder serve`` entry it hands each session, so the server can tell which
+#: tools *this* session may call.
+ALLOWED_TOOLS_ENV = "MULDER_ALLOWED_TOOLS"
+
+
+def may_dispatch(tool_name: str) -> bool:
+    """Return True if the calling session may run ``tool_name`` through a batch.
+
+    ``run_parallel`` and ``start_extraction_batch`` call other tools on the
+    session's behalf, so they must not reach a tool the session could not
+    call directly. The session's own allowlist is read from
+    ``MULDER_ALLOWED_TOOLS``; when it is unset (a standalone ``mulder serve``)
+    nothing is restricted.
+    """
+    raw = os.environ.get(ALLOWED_TOOLS_ENV)
+    if raw is None:
+        return True
+    return f"mcp__mulder__{tool_name}" in raw.split(",")

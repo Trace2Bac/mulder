@@ -21,7 +21,7 @@ from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
 from mulder.server.jobs import JobStore, fill_case_id, validate_tool_args
-from mulder.server.tool_access import EXECUTORS, UNTHROTTLED, tool_access
+from mulder.server.tool_access import EXECUTORS, UNTHROTTLED, may_dispatch, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -673,7 +673,9 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     Use this when you need to run the same tool on multiple evidence items
     (e.g., extracting 4 archives, running fls on 4 disk images) or any mix
-    of independent tools that can safely execute concurrently.
+    of independent tools that can safely execute concurrently. Only tools
+    your own session may call directly can be run this way; any other task
+    is refused with an error and the rest still run.
 
     Each task specifies a tool name and its arguments.  All tasks execute
     in parallel worker threads bounded by ``max_workers``.  Tools that
@@ -699,6 +701,15 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             fn = _tool_dispatch.get(tool_name)
             if fn is None:
                 results[idx] = {"error": f"Unknown tool: {tool_name}"}
+                return
+            # Only tools the calling session itself may call can be dispatched
+            # from here; a nested dispatcher is held to the same rule.
+            if not may_dispatch(tool_name):
+                logger.warning(
+                    "run_parallel: refusing %s, not in the calling session's allowed tools",
+                    tool_name,
+                )
+                results[idx] = {"error": f"{tool_name} is not available through run_parallel"}
                 return
             arguments = fill_case_id(fn, arguments, open_case_id)
             validated = validate_tool_args(fn, arguments)

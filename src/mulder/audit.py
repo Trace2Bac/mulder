@@ -173,6 +173,11 @@ class AuditLog:
         """All tool call IDs indexed from the log (copy of the internal set)."""
         return set(self._tool_call_ids)
 
+    def tool_call_entries(self) -> list[dict[str, object]]:
+        """Snapshot of the indexed ``tool_call`` entries, ``params`` included."""
+        with self._lock:
+            return list(self._tool_calls.values())
+
     def log_ingestion_step(
         self,
         source_name: str,

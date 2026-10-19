@@ -351,6 +351,17 @@ class TestGateEvidenceCitationCoverage:
         gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
         assert gate["passed"] is True
 
+    def test_blank_citation_does_not_cite_every_source(self) -> None:
+        """A finding whose only source is "" cites nothing, so the floor still blocks."""
+        findings = [_make_finding(f"f_00{i}", sources=[""]) for i in (1, 2, 3)]
+        sources = [_make_source(f"src_{i}", 10) for i in "abcde"]
+        gates = _evaluate_finalize_gates(
+            findings, _make_metadata(), sources, _make_audit_summary()
+        )
+        gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
+        assert gate["passed"] is False
+        assert "Only 0 distinct evidence source(s) cited" in str(gate["detail"])
+
 
 class TestAllGatesPass:
     """Integration: verify that a well-formed investigation passes all gates."""

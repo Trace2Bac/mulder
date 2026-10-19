@@ -8,6 +8,7 @@ a finding, and applicable forensic tools that were never invoked.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from collections import defaultdict
@@ -72,6 +73,45 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     ],
 }
 
+# Parameters that name the evidence a mapped tool reads. Output locations
+# such as extract_to and auxiliary inputs such as ssl_keylog_path are left
+# out, so a call is credited only to the evidence it was run on.
+_EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
+    "run_volatility": ("memory_path",),
+    "run_volatility_batch": ("memory_path",),
+    "run_fls": ("image_path",),
+    "run_bulk_extractor": ("image_path",),
+    "run_mmls": ("image_path",),
+    "yara_scan_files": ("target_path",),
+    "run_plaso": ("evidence_path",),
+    "detect_steganography": ("target_path",),
+    "run_optical_listing": ("image_path",),
+    "run_pcap_analysis": ("pcap_path",),
+    "run_evtx_parser": ("evtx_path",),
+    "run_hayabusa": ("evtx_dir",),
+    "index_evtx_file": (),
+    "extract_archive": ("archive_path",),
+}
+
+# index_evtx_file's image_path names the source image of a prior extraction,
+# not the EVTX file that was read. It blocks name-based fallback without
+# crediting paths that happen to share its spelling.
+_EVIDENCE_SELECTOR_PARAMS: dict[str, tuple[str, ...]] = {
+    "index_evtx_file": ("image_path",),
+}
+
+# These tools can find evidence from case metadata or prior extractions.
+# Preserve name-based coverage only when none of a tool's logged calls
+# supplies an explicit evidence-input path or source-image selector.
+# An unmatched target must never enable this fallback.
+_IMPLICIT_INPUT_TOOLS = frozenset(
+    {
+        "yara_scan_memory",
+        "query_sqlite_from_image",
+        "index_evtx_file",
+    }
+)
+
 _MAX_SAMPLE_WINDOWS = 3
 _MAX_SAMPLE_TEXT_LEN = 300
 
@@ -86,6 +126,23 @@ def _get_source_samples(db: CaseDB, source_name: str) -> list[str]:
             text = text[:_MAX_SAMPLE_TEXT_LEN] + "..."
         samples.append(text)
     return samples
+
+
+def _path_forms(value: str | Path, *, expand_user: bool = False) -> set[Path]:
+    """A path as written (made absolute) and its resolved form.
+
+    The audit log keeps tool arguments as the model passed them, while the
+    evidence list holds paths under the resolved evidence root, so either
+    side may name a symlink. Expand ``~`` only for inputs whose tool does so.
+    """
+    path = Path(value)
+    try:
+        if expand_user:
+            path = path.expanduser()
+        path = path.absolute()
+        return {path, path.resolve()}
+    except (OSError, RuntimeError, ValueError):
+        return {path.absolute()}
 
 
 @mcp.tool()
@@ -178,7 +235,11 @@ def audit_tool_coverage() -> dict[str, object]:
 
     Call before finalize_report to ensure no applicable analysis was
     skipped. Re-classifies the evidence directory and compares applicable
-    tools against the audit log.
+    tools against the audit log. A call counts for an evidence item only
+    when one of the tool's evidence-input parameters names that item or a
+    directory holding it; a path that matches no item counts for none.
+    Tools that can pick their input themselves count by name only while
+    none of their calls names an input path or a source image.
 
     Returns per-evidence-item tool coverage with tools_run and
     tools_not_run lists, plus total_gaps count.
@@ -209,8 +270,34 @@ def audit_tool_coverage() -> dict[str, object]:
     classifier = EvidenceClassifier(ClassifierConfig())
     classified = classifier.classify(evidence_root)
 
-    audit_summary = ctx.audit.summary()
-    tools_invoked = set(audit_summary.tool_call_counts.keys())
+    evidence = [
+        form
+        for ev in classified
+        if ev.artifact_type in _EVIDENCE_TOOL_MAP
+        for form in _path_forms(ev.path)
+    ]
+    targets: dict[str, set[Path]] = defaultdict(set)
+    tools_with_explicit_targets: set[str] = set()
+    for entry in ctx.audit.tool_call_entries():
+        params = entry.get("params")
+        tool_name = str(entry.get("tool_name"))
+        hits = targets[tool_name]
+        if not isinstance(params, dict):
+            continue
+        for key in _EVIDENCE_SELECTOR_PARAMS.get(tool_name, ()):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                tools_with_explicit_targets.add(tool_name)
+        for key in _EVIDENCE_INPUT_PARAMS.get(tool_name, ()):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                tools_with_explicit_targets.add(tool_name)
+                # Hayabusa ignores an evtx_dir that is not a directory.
+                if tool_name == "run_hayabusa" and not os.path.isdir(value):
+                    continue
+                for path in _path_forms(value, expand_user=tool_name == "extract_archive"):
+                    if any(e.is_relative_to(path) for e in evidence):
+                        hits.add(path)
 
     items: list[dict[str, object]] = []
     total_gaps = 0
@@ -220,8 +307,17 @@ def audit_tool_coverage() -> dict[str, object]:
         if not applicable:
             continue
 
-        run = [t for t in applicable if t in tools_invoked]
-        not_run = [t for t in applicable if t not in tools_invoked]
+        forms = _path_forms(ev.path)
+        run = [
+            t
+            for t in applicable
+            if t in targets
+            and (
+                (t in _IMPLICIT_INPUT_TOOLS and t not in tools_with_explicit_targets)
+                or any(f.is_relative_to(p) for f in forms for p in targets[t])
+            )
+        ]
+        not_run = [t for t in applicable if t not in run]
         total_gaps += len(not_run)
 
         items.append(

@@ -717,12 +717,12 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 results[idx] = {"error": f"{tool_name} is not available through run_parallel"}
                 return
             arguments = fill_case_id(fn, arguments, open_case_id)
-            problem = validate_tool_args(fn, arguments)
-            if problem is not None:
-                results[idx] = {"error": f"{tool_name}: {problem}"}
+            validated = validate_tool_args(fn, arguments)
+            if isinstance(validated, str):
+                results[idx] = {"error": f"{tool_name}: {validated}"}
                 return
             try:
-                results[idx] = await fn(**arguments)
+                results[idx] = await fn(**validated)
             except Exception as exc:
                 logger.exception("run_parallel: %s failed", tool_name)
                 results[idx] = {"error": f"{tool_name} failed: {exc}"}

@@ -119,11 +119,11 @@ _NETWORK_SOURCE_ALTERNATIVES = (
 
 _SEVERITY_WEIGHTS = {
     "malfind_injection": 10,
-    "suspicious_network": 8,
+    "external_network_connection": 8,
     "hidden_process": 9,
-    "suspicious_cmdline": 7,
-    "unusual_parent": 6,
-    "suspicious_dll_path": 5,
+    "encoded_powershell": 7,
+    "suspicious_parent": 6,
+    "unusual_dll_path": 5,
     "suspicious_environment": 4,
 }
 
@@ -204,7 +204,7 @@ def _check_missing_sources(
 def _score_and_sort_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Score composite results by severity signals and sort most anomalous first."""
     for item in results:
-        reasons = item.get("reasons", [])
+        reasons = item.get("suspicion_reasons", [])
         score = sum(_SEVERITY_WEIGHTS.get(r, 3) for r in reasons)
         item["anomaly_score"] = score
     results.sort(key=lambda x: x.get("anomaly_score", 0), reverse=True)

@@ -99,6 +99,11 @@ class TestSourceIsCited:
     def test_partial_name_no_match(self) -> None:
         assert source_is_cited("bulk.emai", {"pcap.dns"}) is False
 
+    def test_blank_finding_source_cites_nothing(self) -> None:
+        for blank in ("", " ", "\t\n"):
+            assert source_is_cited("bulk.email", {blank}) is False
+            assert source_is_cited("bulk.email", {blank, "bulk.email"}) is True
+
 
 class TestFormatTokenCount:
     """Tests for format_token_count boundaries."""

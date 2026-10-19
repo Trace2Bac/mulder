@@ -138,7 +138,7 @@ def source_is_cited(source_name: str, finding_sources: set[str]) -> bool:
     """
     if not source_name:
         return False
-    return any(source_name in fs or fs in source_name for fs in finding_sources)
+    return any(source_name in fs or fs in source_name for fs in finding_sources if fs.strip())
 
 
 def classify_ip(ip: str) -> str:

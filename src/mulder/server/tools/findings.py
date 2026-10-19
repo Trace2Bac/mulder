@@ -240,18 +240,34 @@ def _evaluate_finalize_gates(
     return gates
 
 
+def _is_citable(audit: AuditLog, ref: str, seen: frozenset[str] = frozenset()) -> bool:
+    """True if *ref* is a logged, successful call to an evidence tool.
+
+    An aggregate entry (one that lists ``sub_calls``, such as a ``run_parallel``
+    batch) is citable only through its children: at least one of them must be
+    citable in turn, so an empty batch, a batch of failed calls or a batch that
+    only wrapped a findings tool cannot launder them into evidence.
+    """
+    entry = audit.get_tool_call(ref)
+    if (
+        entry is None
+        or ref in seen
+        or entry.get("status") == "error"
+        or entry.get("tool_name") in _FINDING_TOOLS
+    ):
+        return False
+    sub_calls = entry.get("sub_calls")
+    if sub_calls is None:
+        return True
+    children = sub_calls if isinstance(sub_calls, list) else []
+    return any(
+        isinstance(child, str) and _is_citable(audit, child, seen | {ref}) for child in children
+    )
+
+
 def _uncitable_refs(audit: AuditLog, evidence_refs: list[str]) -> list[str]:
     """Refs that are not a logged, successful call to an evidence tool."""
-    uncitable = []
-    for ref in evidence_refs:
-        entry = audit.get_tool_call(ref)
-        if (
-            entry is None
-            or entry.get("status") == "error"
-            or entry.get("tool_name") in _FINDING_TOOLS
-        ):
-            uncitable.append(ref)
-    return uncitable
+    return [ref for ref in evidence_refs if not _is_citable(audit, ref)]
 
 
 def _sanitize_event_time(ts: str | None) -> tuple[str | None, str | None]:

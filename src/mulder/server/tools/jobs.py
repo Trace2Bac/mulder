@@ -417,7 +417,7 @@ def get_completed_results(
             params={"batch_id": batch_id, "tool_names": tool_names},
             output_hash=hash_output({"count": len(results)}),
             duration_ms=elapsed,
-            sub_calls=sub_call_ids if sub_call_ids else None,
+            sub_calls=sub_call_ids,
         )
     except RuntimeError:
         logger.warning("Audit skipped: no active case context for get_completed_results")

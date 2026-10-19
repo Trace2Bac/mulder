@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -18,7 +19,7 @@ from mulder.db import CaseDB
 from mulder.server import app
 from mulder.server.app import _tool_dispatch_sync
 from mulder.server.helpers import audited_tool, error_response
-from mulder.server.tool_access import ALLOWED_TOOLS_ENV
+from mulder.server.tool_access import ALLOWED_TOOLS_ENV, Role, get_tools_for_role
 
 
 @pytest.fixture()
@@ -201,6 +202,73 @@ def test_a_dispatcher_with_nothing_to_run_is_not_citable(ctx: MagicMock) -> None
     batch_id = str(parallel["batch_id"])
     assert _entry_by_id(ctx, batch_id)["status"] == "error"
     assert _submit([batch_id])["status"] == "error"
+
+
+# --- an aggregate id is only as citable as the calls under it -------------------------
+
+
+def _direct(name: str) -> Callable[..., Awaitable[object]]:
+    """Run the real sync tool inline, skipping the server's worker-thread limiter."""
+    fn = _tool_dispatch_sync[name]
+
+    @functools.wraps(fn)
+    async def run(**kwargs: object) -> object:
+        return fn(**kwargs)
+
+    return run
+
+
+@pytest.fixture()
+def narrative_executor(ctx: MagicMock) -> Iterator[None]:
+    """A NARRATIVE_EXECUTOR session that may also run ``search`` (the positive control)."""
+    allowed = [*get_tools_for_role(Role.NARRATIVE_EXECUTOR), "mcp__mulder__search"]
+    with (
+        patch.dict(os.environ, {ALLOWED_TOOLS_ENV: ",".join(allowed)}),
+        patch.dict(app._tool_dispatch, {n: _direct(n) for n in ("get_findings", "search")}),
+        patch("mulder.server.app.get_ctx", return_value=ctx),
+        patch("mulder.server.app.has_ctx", return_value=True),
+        patch("mulder.server.tools.core.get_ctx", return_value=ctx),
+    ):
+        yield
+
+
+def _batch(tasks: list[dict[str, object]]) -> str:
+    return str(anyio.run(app.run_parallel, tasks)["batch_id"])
+
+
+@pytest.mark.usefixtures("narrative_executor")
+def test_a_batch_of_a_findings_tool_is_not_citable(ctx: MagicMock) -> None:
+    batch_id = _batch([{"tool": "get_findings", "args": {}}])
+
+    assert "status" not in _entry_by_id(ctx, batch_id)  # get_findings itself succeeded
+    assert _submit([batch_id])["status"] == "error"
+
+
+@pytest.mark.usefixtures("narrative_executor")
+def test_a_batch_wrapping_a_failed_batch_is_not_citable(ctx: MagicMock) -> None:
+    outer = _batch(
+        [{"tool": "run_parallel", "args": {"tasks": [{"tool": "update_finding", "args": {}}]}}]
+    )
+
+    [inner] = cast("list[str]", _entry_by_id(ctx, outer)["sub_calls"])
+    assert _entry_by_id(ctx, inner)["status"] == "error"
+    assert _submit([outer])["status"] == "error"
+
+
+@pytest.mark.usefixtures("narrative_executor")
+def test_an_empty_batch_is_not_citable(ctx: MagicMock) -> None:
+    assert _submit([_batch([])])["status"] == "error"
+
+
+@pytest.mark.usefixtures("narrative_executor")
+def test_a_batch_of_a_search_with_no_matches_stays_citable(ctx: MagicMock) -> None:
+    """A successful search that finds nothing is valid negative evidence."""
+    batch_id = _batch([{"tool": "search", "args": {"query": "no-such-indicator"}}])
+
+    [child] = cast("list[str]", _entry_by_id(ctx, batch_id)["sub_calls"])
+    assert "status" not in _entry_by_id(ctx, child)
+    assert _submit([batch_id])["status"] == "accepted"
+    assert _submit([child])["status"] == "accepted"
 
 
 def _unmarked_error_returns() -> list[str]:

@@ -752,8 +752,11 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     elapsed_ms = (time.monotonic() - t0) * 1000
 
+    # A nested run_parallel answers with its batch_id rather than a tool_call_id.
     sub_call_ids = [
-        r.get("tool_call_id", "") for r in results if isinstance(r, dict) and "tool_call_id" in r
+        str(r.get("tool_call_id") or r.get("batch_id"))
+        for r in results
+        if isinstance(r, dict) and (r.get("tool_call_id") or r.get("batch_id"))
     ]
 
     if has_ctx():

@@ -437,7 +437,9 @@ def verify_evidence_integrity() -> dict[str, object]:
     Recomputes BLAKE2b hashes from stored windows and compares against
     the hashes recorded at ingestion. This is a fast DB-only operation.
     Wall-clock time is included in the response since verification
-    duration is meaningful for integrity auditing.
+    duration is meaningful for integrity auditing. A source reported as
+    ``incomplete`` was not fully indexed: its indexing was interrupted or
+    is still running.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -448,12 +450,13 @@ def verify_evidence_integrity() -> dict[str, object]:
     verified = sum(1 for r in results if r["status"] == "verified")
     modified = sum(1 for r in results if r["status"] == "modified")
     no_hash = sum(1 for r in results if r["status"] == "no_hash_recorded")
+    incomplete = sum(1 for r in results if r["status"] == "incomplete")
 
     elapsed_ms = (time.monotonic() - t0) * 1000
 
     if total == 0:
         status = "no_sources_indexed"
-    elif modified > 0:
+    elif modified > 0 or incomplete > 0:
         status = "integrity_issues_detected"
     else:
         status = "all_verified"
@@ -465,6 +468,7 @@ def verify_evidence_integrity() -> dict[str, object]:
         "verified_count": verified,
         "modified_count": modified,
         "no_hash_count": no_hash,
+        "incomplete_count": incomplete,
         "sources": results,
         "elapsed_ms": round(elapsed_ms, 1),
     }

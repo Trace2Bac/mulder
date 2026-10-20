@@ -6,6 +6,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 from __future__ import annotations
 
 import bz2
+import contextlib
 import gzip
 import hashlib
 import json
@@ -23,7 +24,7 @@ from mulder.extractors.classifier import ClassifiedEvidence
 from mulder.extractors.optical import probe_optical
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.server.app import (
-    create_case,
+    create_case_and_hold,
     get_cfg,
     get_ctx,
     has_ctx,
@@ -119,30 +120,32 @@ def scan_evidence(
             error_type="invalid_input",
         )
 
-    try:
-        result = _scan_evidence_inner(ev_path, case_id, replace)
-    except Exception as exc:
-        logger.exception("scan_evidence failed for %r", ev_path)
-        return error_response(
-            tc_id,
-            "scan_evidence",
-            params,
-            f"scan_evidence failed: {exc}",
-            (time.monotonic() - t0) * 1000,
-        )
+    # The new case stays counted as in use until the audit entry is written.
+    with contextlib.ExitStack() as hold:
+        try:
+            result = _scan_evidence_inner(ev_path, case_id, replace, hold)
+        except Exception as exc:
+            logger.exception("scan_evidence failed for %r", ev_path)
+            return error_response(
+                tc_id,
+                "scan_evidence",
+                params,
+                f"scan_evidence failed: {exc}",
+                (time.monotonic() - t0) * 1000,
+            )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    result["tool_call_id"] = tc_id
-    if has_ctx():
-        ctx = get_ctx()
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="scan_evidence",
-            params=params,
-            output_hash=hash_output(result),
-            duration_ms=elapsed,
-        )
-    return result
+        elapsed = (time.monotonic() - t0) * 1000
+        result["tool_call_id"] = tc_id
+        if has_ctx():
+            ctx = get_ctx()
+            ctx.audit.log_tool_call(
+                tool_call_id=tc_id,
+                tool_name="scan_evidence",
+                params=params,
+                output_hash=hash_output(result),
+                duration_ms=elapsed,
+            )
+        return result
 
 
 def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> list[str]:
@@ -205,8 +208,13 @@ def _manifest_entry(item: ClassifiedEvidence) -> dict[str, object]:
     return entry
 
 
-def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str, object]:
-    """Inner implementation of scan_evidence with full error propagation."""
+def _scan_evidence_inner(
+    ev_path: Path, case_id: str, replace: bool, hold: contextlib.ExitStack
+) -> dict[str, object]:
+    """Inner implementation of scan_evidence with full error propagation.
+
+    *hold* keeps the new case counted as in use until the caller closes it.
+    """
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 
     classifier = EvidenceClassifier(ClassifierConfig())
@@ -236,7 +244,7 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
             atype = f"{atype}, {mi['media']}"
         tree_lines.append(f"{indent}{name}  [{atype}] {size_label}")
 
-    result = create_case(case_id, str(ev_path), replace=replace)
+    result = create_case_and_hold(hold, case_id, str(ev_path), replace=replace)
 
     if isinstance(result, dict) and result.get("status") == "case_exists":
         result["evidence_tree"] = "\n".join(tree_lines)
@@ -398,7 +406,17 @@ def open_case(case_id: str) -> dict[str, object]:
             error_type="not_found",
         )
 
-    ctx = load_case(case_id)
+    try:
+        ctx = load_case(case_id)
+    except RuntimeError as exc:
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            str(exc),
+            (time.monotonic() - t0) * 1000,
+            error_type="case_in_use",
+        )
     source_count = ctx.db.get_source_count()
 
     result: dict[str, object] = {

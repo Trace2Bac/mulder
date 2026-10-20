@@ -321,6 +321,7 @@ def export_iocs(
     Returns:
         Dict with ``stix_path`` and ``csv_path`` keys (None if skipped).
     """
+    findings = [f for f in findings if not f.title.startswith("[NEGATIVE]")]
     output_dir.mkdir(parents=True, exist_ok=True)
     iocs = extract_classified_iocs(findings)
     result: dict[str, str | None] = {"stix_path": None, "csv_path": None}

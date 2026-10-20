@@ -146,6 +146,11 @@ _IX_WINDOWS_SOURCE_LINE = (
     "CREATE INDEX IF NOT EXISTS ix_windows_source_line ON windows (source_id, line_start)"
 )
 
+# windows_hash of a source whose windows are still being stored. It is replaced
+# by the real hash only after the last batch, so a source left with it was not
+# fully indexed. NULL still means a source from before windows_hash existed.
+WINDOWS_HASH_PENDING = "pending"
+
 _FTS5_OPERATORS = frozenset({"AND", "OR", "NOT", "NEAR"})
 # FTS5's bareword grammar: ASCII alphanumerics, "_" and codepoints >= 0x80.
 # Any token outside it (`@nasa`, `#tag`, `a=b`, `file.exe`, ...) is a syntax
@@ -519,6 +524,7 @@ class CaseDB:
         source_hash: str,
         extractor: str,
         line_count: int,
+        windows_hash: str | None = None,
     ) -> int:
         """Register a new evidence source; return its source_id."""
 
@@ -536,6 +542,7 @@ class CaseDB:
                         extractor=extractor,
                         line_count=line_count,
                         ingested_at=now,
+                        windows_hash=windows_hash,
                     )
                 )
                 if result.inserted_primary_key is None:
@@ -562,7 +569,7 @@ class CaseDB:
         ]
 
         def _do_insert() -> None:
-            """Bulk-insert window rows, sync the FTS index, and update windows_hash."""
+            """Bulk-insert window rows and sync the FTS index."""
             with self._engine.begin() as conn:
                 last_id_row = conn.execute(
                     text("SELECT COALESCE(MAX(window_id), 0) FROM windows WHERE source_id = :sid"),
@@ -579,26 +586,20 @@ class CaseDB:
                     {"sid": source_id, "last_id": last_id},
                 )
 
-                h = hashlib.blake2b(digest_size=32)
-                if last_id > 0:
-                    prior = conn.execute(
-                        text(
-                            "SELECT raw_text FROM windows "
-                            "WHERE source_id = :sid AND window_id <= :last_id "
-                            "ORDER BY window_id"
-                        ),
-                        {"sid": source_id, "last_id": last_id},
-                    )
-                    for prior_row in prior:
-                        h.update(prior_row[0].encode())
-                for w in windows:
-                    h.update(w.raw_text.encode())
+        self._wq.submit(_do_insert)
+
+    def set_windows_hash(self, source_id: int, windows_hash: str) -> None:
+        """Record the hash of a source's windows once all of them are stored."""
+
+        def _do_set() -> None:
+            """Write windows_hash for the source."""
+            with self._engine.begin() as conn:
                 conn.execute(
                     text("UPDATE sources SET windows_hash = :wh WHERE source_id = :sid"),
-                    {"wh": "blake2b:" + h.hexdigest(), "sid": source_id},
+                    {"wh": windows_hash, "sid": source_id},
                 )
 
-        self._wq.submit(_do_insert)
+        self._wq.submit(_do_set)
 
     def search_windows(
         self,
@@ -1307,7 +1308,8 @@ class CaseDB:
         Recomputes BLAKE2b from stored windows in a single streaming query
         ordered by source_id, comparing each hash to the windows_hash
         recorded at ingestion. Sources without a stored hash are reported
-        as ``no_hash_recorded``.
+        as ``no_hash_recorded``, and sources whose indexing never finished
+        as ``incomplete``.
         """
         sources = self.get_sources()
         no_hash_ids = {s.source_id for s in sources if not s.windows_hash}
@@ -1348,13 +1350,19 @@ class CaseDB:
             else:
                 h, window_count = entry
                 actual = "blake2b:" + h.hexdigest()
+            if src.windows_hash == WINDOWS_HASH_PENDING:
+                status = "incomplete"
+            elif actual == src.windows_hash:
+                status = "verified"
+            else:
+                status = "modified"
             results.append(
                 {
                     "source_name": src.source_name,
                     "expected_hash": src.windows_hash,
                     "actual_hash": actual,
                     "window_count": window_count,
-                    "status": "verified" if actual == src.windows_hash else "modified",
+                    "status": status,
                 }
             )
         return results

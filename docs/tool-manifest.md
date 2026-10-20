@@ -68,7 +68,7 @@ Verify the integrity of all indexed source data by recomputing BLAKE2b hashes.
 
 *No parameters.*
 
-**Returns:** `total_sources`, `verified_count`, `modified_count`, `no_hash_count`, `sources[]`, `elapsed_ms`
+**Returns:** `total_sources`, `verified_count`, `modified_count`, `no_hash_count`, `incomplete_count`, `sources[]`, `elapsed_ms`. A source is `incomplete` when its indexing was interrupted or is still running.
 
 **Roles:** `CATALOG`
 

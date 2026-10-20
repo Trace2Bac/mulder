@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from mulder.db import WINDOWS_HASH_PENDING
 from mulder.extractors.disk import _mount_image, _unmount_image
 from mulder.models import WindowRow
 
@@ -163,7 +164,9 @@ def extract_and_index(
 
     Registers a source, splits text into fixed-size windows (4 lines
     each), extracts timestamps, and inserts into the database in
-    batches of ``_INSERT_BATCH_SIZE`` to bound peak memory.
+    batches of ``_INSERT_BATCH_SIZE`` to bound peak memory. The windows
+    hash is recorded only after the last batch, so a source whose indexing
+    is cut short keeps ``WINDOWS_HASH_PENDING`` and verifies as incomplete.
 
     Returns a summary dict with ``source_name``, ``windows_indexed``,
     ``line_count``, and ``status``.
@@ -202,12 +205,15 @@ def extract_and_index(
         source_hash=content_hash,
         extractor=extractor_name,
         line_count=original_line_count,
+        windows_hash=WINDOWS_HASH_PENDING,
     )
 
     total_indexed = 0
     batch: list[WindowRow] = []
+    windows_hash = hashlib.blake2b(digest_size=32)
 
     for window_text, first_line, last_line in _line_aligned_windows(raw_output):
+        windows_hash.update(window_text.encode())
         event_time = _parse_timestamp(window_text)
         batch.append(
             WindowRow(
@@ -228,6 +234,7 @@ def extract_and_index(
     if batch:
         ctx.db.insert_windows(source_id, batch)
         total_indexed += len(batch)
+    ctx.db.set_windows_hash(source_id, "blake2b:" + windows_hash.hexdigest())
 
     return {
         "source_name": source_name,

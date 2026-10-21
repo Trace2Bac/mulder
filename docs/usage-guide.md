@@ -494,6 +494,8 @@ mulder investigate /evidence my-case \
 
 See the [LiteLLM documentation](https://docs.litellm.ai/docs/proxy/configs) for config file format details.
 
+The proxy listens on `127.0.0.1` only, and mulder generates a random master key for each run and hands it to the proxy as `LITELLM_MASTER_KEY`. Leave `general_settings.master_key` unset in a custom config (or set it to `os.environ/LITELLM_MASTER_KEY`); the proxy fails to start if it does not accept that key.
+
 ## Case Briefing
 
 You can provide investigation context by placing a `MULDER.md` file in the root of your evidence directory. This is optional but recommended when you have background knowledge about the case.

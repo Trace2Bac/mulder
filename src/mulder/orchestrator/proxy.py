@@ -340,6 +340,83 @@ def _status(url: str, key: str | None = None) -> int | None:
         return None
 
 
+def _listener_inodes(port: int, proc: Path) -> set[str] | None:
+    """Socket inodes listening on TCP *port*, or ``None`` without ``/proc``."""
+    inodes: set[str] = set()
+    tables = 0
+    for name in ("tcp", "tcp6"):
+        try:
+            text = (proc / "net" / name).read_text(encoding="ascii")
+        except OSError:
+            continue
+        tables += 1
+        for line in text.splitlines()[1:]:
+            cols = line.split()
+            # local_address is HEXIP:HEXPORT; state 0A is LISTEN.
+            if len(cols) > 9 and cols[3] == "0A" and int(cols[1].rsplit(":", 1)[1], 16) == port:
+                inodes.add(cols[9])
+    return inodes if tables else None
+
+
+def _parent_pid(pid: int, proc: Path) -> int | None:
+    """Parent of *pid* from ``/proc/<pid>/stat``, or ``None`` if unreadable."""
+    try:
+        stat = (proc / str(pid) / "stat").read_text(encoding="ascii", errors="replace")
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _listener_owned_by(port: int, root_pid: int, proc: Path = Path("/proc")) -> bool | None:
+    """Whether every listener on *port* is held by *root_pid* or a descendant.
+
+    Maps each LISTEN socket inode in ``/proc/net/tcp{,6}`` to the processes
+    whose ``/proc/<pid>/fd`` links point at it, then walks each one's parent
+    chain. A socket whose holder cannot be seen (another user's process)
+    counts as not ours.
+
+    Returns:
+        ``None`` when ``/proc`` is unavailable (non-Linux), so the caller
+        falls back to the key challenge alone.
+    """
+    import os
+
+    inodes = _listener_inodes(port, proc)
+    if inodes is None:
+        return None
+    links = {f"socket:[{inode}]" for inode in inodes}
+    holders: dict[str, set[int]] = {}
+    try:
+        pids = [int(p.name) for p in proc.iterdir() if p.name.isdigit()]
+    except OSError:
+        return None
+    for pid in pids:
+        try:
+            fds = list((proc / str(pid) / "fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                link = os.readlink(fd)
+            except OSError:
+                continue
+            if link in links:
+                holders.setdefault(link, set()).add(pid)
+
+    def descends(pid: int | None) -> bool:
+        seen: set[int] = set()
+        while pid and pid not in seen:
+            if pid == root_pid:
+                return True
+            seen.add(pid)
+            pid = _parent_pid(pid, proc)
+        return False
+
+    if not links or holders.keys() != links:
+        return False
+    return all(descends(pid) for pids_ in holders.values() for pid in pids_)
+
+
 def _wait_for_health(
     port: int,
     master_key: str,
@@ -349,9 +426,11 @@ def _wait_for_health(
     """Wait for the LiteLLM proxy we started to become healthy.
 
     Polls the proxy health endpoint until it responds or the timeout
-    expires, then checks that the server answering is ours: it must accept
-    the per-run master key on an authenticated endpoint and reject a wrong
-    one. Gives up early if the proxy process has exited.
+    expires, then checks that the server answering is ours: on Linux the
+    listening socket must belong to *process* or a descendant before any
+    key is sent, and the server must accept the per-run master key on an
+    authenticated endpoint and reject a wrong one (probed in random order).
+    Gives up early if the proxy process has exited.
 
     Args:
         port: Port the proxy is listening on.
@@ -372,11 +451,19 @@ def _wait_for_health(
             logger.error("LiteLLM proxy exited with code %s before becoming healthy", code)
             return False
         if any((status := _status(url)) is not None and status < 400 for url in urls):
-            info = f"{base}/model_group/info"
-            ours = (_status(info, master_key) or 500) < 400
-            wrong = _status(info, "sk-" + secrets.token_urlsafe(32))
-            if ours and wrong is not None and wrong >= 400 and process.poll() is None:
-                return True
+            # No key is sent until the listener is known to be our child;
+            # where /proc cannot tell, the key challenge runs in random order.
+            if _listener_owned_by(port, process.pid) is not False:
+                decoy = "sk-" + secrets.token_urlsafe(32)
+                probes = [master_key, decoy]
+                if secrets.choice((True, False)):
+                    probes.reverse()
+                info = f"{base}/model_group/info"
+                got = {key: _status(info, key) for key in probes}
+                ours = (got[master_key] or 500) < 400
+                wrong = got[decoy]
+                if ours and wrong is not None and wrong >= 400 and process.poll() is None:
+                    return True
             logger.error("The server on %s is not the LiteLLM proxy mulder started", base)
             return False
         time.sleep(_HEALTH_CHECK_INTERVAL)

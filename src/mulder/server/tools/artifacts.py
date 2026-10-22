@@ -184,7 +184,6 @@ def parse_browser_history() -> dict[str, object]:
         (r"/Chrome/.*?/History$", "chrome"),
         (r"/Firefox/Profiles/.*?/places\.sqlite$", "firefox"),
         (r"/Safari/History\.db$", "safari"),
-        (r"/Google/Chrome/.*?/History$", "chrome"),
     ]
 
     all_results: list[str] = []

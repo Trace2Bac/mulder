@@ -870,7 +870,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       </div>
       {% endif %}
       <div class="finding-source-pills">
-        {% for src in f.sources %}<span class="source-pill" onclick="navigateToEvidence('{{ src }}')">{{ src | truncate(40) }}</span>{% endfor %}
+        {% for src in f.sources %}<span class="source-pill" data-evidence-source="{{ src }}">{{ src | truncate(40) }}</span>{% endfor %}
       </div>
       {% if f.mitre_attack_ids %}
       <div class="finding-source-pills">
@@ -1021,7 +1021,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td>
-          <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
+          <button class="ioc-copy-btn" data-copy="{{ ioc.value }}" title="Copy">&#128203;</button>
           {% if 'IP' in ioc.type %}<a class="ioc-lookup" href="https://www.virustotal.com/gui/ip-address/{{ ioc.value }}" target="_blank" rel="noopener" title="VirusTotal">VT</a>{% endif %}
         </td>
       </tr>
@@ -1044,7 +1044,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td>
-          <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
+          <button class="ioc-copy-btn" data-copy="{{ ioc.value }}" title="Copy">&#128203;</button>
           {% if ioc.type in ['SHA256','SHA1','MD5'] %}<a class="ioc-lookup" href="https://www.virustotal.com/gui/search/{{ ioc.value }}" target="_blank" rel="noopener" title="VirusTotal">VT</a>{% endif %}
         </td>
       </tr>
@@ -1066,7 +1066,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <td><code>{{ ioc.value }}</code></td>
         <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
-        <td><button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button></td>
+        <td><button class="ioc-copy-btn" data-copy="{{ ioc.value }}" title="Copy">&#128203;</button></td>
       </tr>
       {% endfor %}
       </tbody>
@@ -1124,7 +1124,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     </thead>
     <tbody>
     {% for s in sources_list %}
-      <tr style="cursor:pointer" onclick="navigateToEvidence('{{ s.source_name }}')">
+      <tr style="cursor:pointer" data-evidence-source="{{ s.source_name }}">
         <td><strong>{{ s.source_name }}</strong></td>
         <td class="mono">{{ s.extractor }}</td>
         <td class="mono" style="text-align:right;">{{ s.line_count | string }}</td>
@@ -1409,6 +1409,14 @@ function navigateToEvidence(sourceName) {
   navigate('evidence');
   setTimeout(function() { selectEvSource(sourceName); }, 150);
 }
+// Source names and IOC values come off the evidence; an inline onclick
+// decodes &#39; back to a quote before running, so they travel in data-*.
+document.addEventListener('click', function(e) {
+  var el = e.target.closest ? e.target.closest('[data-evidence-source]') : null;
+  if (el) navigateToEvidence(el.dataset.evidenceSource);
+  var copy = e.target.closest ? e.target.closest('[data-copy]') : null;
+  if (copy) copyText(copy.dataset.copy);
+});
 
 function handleHash() {
   var hash = window.location.hash;
@@ -1532,6 +1540,7 @@ function filterIocTables() {
 
 /* ========== UTILS ========== */
 function showToast(msg) { var t=document.getElementById('copyToast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},1500); }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function copyText(text) { if(navigator.clipboard)navigator.clipboard.writeText(text); showToast('Copied: '+text.substring(0,30)+(text.length>30?'...':'')); }
 
 /* ========== EVIDENCE DRAWER ========== */
@@ -1539,15 +1548,17 @@ function openDrawer(tcId) {
   var entry = AUDIT_INDEX[tcId]; if (!entry) return;
   document.getElementById('drawerTitle').textContent = entry.tool_name;
   var body = document.getElementById('drawerBody'), html = '';
-  html += '<div class="drawer-section"><div class="drawer-section-title">Tool Call ID</div><div class="mono" style="font-size:0.8rem;color:var(--accent);">'+tcId+'</div></div>';
+  html += '<div class="drawer-section"><div class="drawer-section-title">Tool Call ID</div><div class="mono" style="font-size:0.8rem;color:var(--accent);">'+escHtml(tcId)+'</div></div>';
   html += '<div class="drawer-section"><div class="drawer-section-title">Duration</div><div class="mono" style="font-size:0.9rem;">'+(entry.duration_ms/1000).toFixed(1)+'s ('+Math.round(entry.duration_ms)+'ms)</div></div>';
-  if (entry.timestamp) html += '<div class="drawer-section"><div class="drawer-section-title">Timestamp</div><div class="mono" style="font-size:0.8rem;">'+entry.timestamp.substring(0,19)+'</div></div>';
+  if (entry.timestamp) html += '<div class="drawer-section"><div class="drawer-section-title">Timestamp</div><div class="mono" style="font-size:0.8rem;">'+escHtml(entry.timestamp.substring(0,19))+'</div></div>';
   html += '<div class="drawer-section"><div class="drawer-section-title">Parameters</div><div class="drawer-json">'+syntaxHighlight(JSON.stringify(entry.params||{},null,2))+'</div></div>';
-  if (entry.output_hash) html += '<div class="drawer-section"><div class="drawer-section-title">Output Hash</div><div class="mono" style="font-size:0.72rem;color:var(--text-dim);word-break:break-all;">'+entry.output_hash+'</div></div>';
+  if (entry.output_hash) html += '<div class="drawer-section"><div class="drawer-section-title">Output Hash</div><div class="mono" style="font-size:0.72rem;color:var(--text-dim);word-break:break-all;">'+escHtml(entry.output_hash)+'</div></div>';
   var rf = TC_TO_FINDINGS[tcId] || [];
-  if (rf.length) { html += '<div class="drawer-section"><div class="drawer-section-title">Referenced by Findings ('+rf.length+')</div>'; rf.forEach(function(fid){ html += '<a class="drawer-finding-link" onclick="closeDrawer();navigateToFinding(\''+fid+'\')">'+(FINDINGS_TITLES[fid]||fid)+'</a>'; }); html += '</div>'; }
-  html += '<div class="drawer-section"><button class="btn-sm" onclick="copyDrawerJson(\''+tcId+'\')">Copy as JSON</button></div>';
+  if (rf.length) { html += '<div class="drawer-section"><div class="drawer-section-title">Referenced by Findings ('+rf.length+')</div>'; rf.forEach(function(fid){ html += '<a class="drawer-finding-link" data-finding="'+escHtml(fid)+'">'+escHtml(FINDINGS_TITLES[fid]||fid)+'</a>'; }); html += '</div>'; }
+  html += '<div class="drawer-section"><button class="btn-sm drawer-copy-json">Copy as JSON</button></div>';
   body.innerHTML = html;
+  body.querySelectorAll('.drawer-finding-link').forEach(function(a) { a.addEventListener('click', function() { closeDrawer(); navigateToFinding(a.dataset.finding); }); });
+  body.querySelector('.drawer-copy-json').addEventListener('click', function() { copyDrawerJson(tcId); });
   document.getElementById('drawerOverlay').classList.add('open');
   document.getElementById('evidenceDrawer').classList.add('open');
 }
@@ -1570,22 +1581,23 @@ function buildEvSourceTree() {
   });
   var html = '';
   Object.keys(groups).sort().forEach(function(g) {
-    html += '<div class="ev-tree-group"><div class="ev-tree-group-header" onclick="this.parentElement.classList.toggle(\'collapsed\')"><span class="chev">&#9660;</span> ' + g.charAt(0).toUpperCase()+g.slice(1) + ' <span style="opacity:0.5;font-size:0.6rem;">(' + groups[g].length + ')</span></div><div class="ev-tree-items">';
+    html += '<div class="ev-tree-group"><div class="ev-tree-group-header" onclick="this.parentElement.classList.toggle(\'collapsed\')"><span class="chev">&#9660;</span> ' + escHtml(g.charAt(0).toUpperCase()+g.slice(1)) + ' <span style="opacity:0.5;font-size:0.6rem;">(' + groups[g].length + ')</span></div><div class="ev-tree-items">';
     groups[g].sort().forEach(function(name) {
       var meta = SOURCES_META[name] || {};
-      html += '<div class="ev-tree-item" data-source="'+name+'" onclick="selectEvSource(\''+name+'\')">'+name+'<span class="line-count">'+(meta.line_count||'')+'</span></div>';
+      html += '<div class="ev-tree-item" data-source="'+escHtml(name)+'">'+escHtml(name)+'<span class="line-count">'+(meta.line_count||'')+'</span></div>';
     });
     html += '</div></div>';
   });
   if (!html) html = '<div class="ev-empty">No evidence data embedded in this report.</div>';
   tree.innerHTML = html;
+  tree.querySelectorAll('.ev-tree-item').forEach(function(el) { el.addEventListener('click', function() { selectEvSource(el.dataset.source); }); });
   evTreeBuilt = true;
 }
 function selectEvSource(name) {
   buildEvSourceTree();
   currentEvSource = name;
-  document.querySelectorAll('.ev-tree-item').forEach(function(i) { i.classList.toggle('active', i.dataset.source === name); });
-  var activeItem = document.querySelector('.ev-tree-item[data-source="'+name+'"]');
+  var activeItem = null;
+  document.querySelectorAll('.ev-tree-item').forEach(function(i) { var on = i.dataset.source === name; i.classList.toggle('active', on); if (on) activeItem = i; });
   if (activeItem) {
     var group = activeItem.closest('.ev-tree-group');
     if (group) group.classList.remove('collapsed');
@@ -1653,8 +1665,8 @@ function cmdSearch() {
   results.forEach(function(r, i) {
     var cls = 'cmd-result-item' + (i === cmdSelected ? ' selected' : '');
     html += '<div class="'+cls+'" data-idx="'+i+'" onclick="cmdExec('+i+')" onmouseenter="cmdSelected='+i+';cmdHighlight()">';
-    html += '<span class="cmd-result-type t-'+r.type+'">'+r.type+'</span><span class="cmd-result-name">'+r.label+'</span>';
-    if (r.meta) html += '<span class="cmd-result-meta">'+r.meta+'</span>';
+    html += '<span class="cmd-result-type t-'+escHtml(r.type)+'">'+escHtml(r.type)+'</span><span class="cmd-result-name">'+escHtml(r.label)+'</span>';
+    if (r.meta) html += '<span class="cmd-result-meta">'+escHtml(r.meta)+'</span>';
     html += '</div>';
   });
   if (!results.length) html = '<div style="padding:1rem;text-align:center;color:var(--text-dim);font-size:0.85rem;">No results</div>';

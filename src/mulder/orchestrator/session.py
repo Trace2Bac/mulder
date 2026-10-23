@@ -219,6 +219,29 @@ def _classify_fatal_error(text: str) -> tuple[str, str]:
     return "", ""
 
 
+def _classify_assistant_error(message: object, text: str) -> str:
+    """Classify a fatal error only when the CLI flagged the assistant message.
+
+    The CLI marks the assistant messages it synthesizes for API failures
+    with a structured ``error``. Model-written text can quote evidence such
+    as "Permission denied", so unflagged messages are never classified.
+
+    Args:
+        message: An ``AssistantMessage``.
+        text: Text content of one of its blocks.
+
+    Returns:
+        "auth", "model", or "" when the message is not a fatal error.
+    """
+    error = getattr(message, "error", None)
+    if not error:
+        return ""
+    category, _ = _classify_fatal_error(text)
+    if not category and error == "authentication_failed":
+        return "auth"
+    return category
+
+
 def _auth_suggestion() -> str:
     """Build an actionable suggestion for auth failures.
 
@@ -767,7 +790,7 @@ class SessionExecutor:
                 if text.strip():
                     stats.has_output = True
 
-                category, _ = _classify_fatal_error(text)
+                category = _classify_assistant_error(message, text)
                 if category == "auth":
                     raise AuthenticationError(
                         message=text,
@@ -1034,7 +1057,7 @@ class SessionExecutor:
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             collected_text.append(block.text)
-                            category, _ = _classify_fatal_error(block.text)
+                            category = _classify_assistant_error(message, block.text)
                             if category == "auth":
                                 raise AuthenticationError(
                                     message=block.text,

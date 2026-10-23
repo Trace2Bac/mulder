@@ -225,6 +225,7 @@ class TestTextBlockDetection:
         mock_assistant = MagicMock()
         mock_assistant.content = [mock_text_block]
         mock_assistant.message_id = "msg-1"
+        mock_assistant.error = "authentication_failed"
         mock_assistant.usage = {"input_tokens": 0, "output_tokens": 0}
 
         async def mock_query(**kwargs: object):  # type: ignore[no-untyped-def]
@@ -259,6 +260,7 @@ class TestTextBlockDetection:
         mock_assistant = MagicMock()
         mock_assistant.content = [mock_text_block]
         mock_assistant.message_id = "msg-1"
+        mock_assistant.error = "invalid_request"
         mock_assistant.usage = {"input_tokens": 0, "output_tokens": 0}
 
         async def mock_query(**kwargs: object):  # type: ignore[no-untyped-def]

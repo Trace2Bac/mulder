@@ -25,6 +25,7 @@ from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     adaptive_timeout,
+    cli_path,
     hash_output,
     make_tool_call_id,
 )
@@ -656,7 +657,7 @@ def yara_scan_files(
             t0,
         )
 
-    cmd = ["yara", "-r", "-s", *rules_args, target_path]
+    cmd = ["yara", "-r", "-s", *rules_args, cli_path(target_path)]
     return _run_yara_scan(
         cmd=cmd,
         timeout=adaptive_timeout(target_path, per_gib=300),
@@ -742,7 +743,7 @@ def yara_scan_memory(
             t0,
         )
 
-    cmd = ["yara", "-s", *rules_args, image_path]
+    cmd = ["yara", "-s", *rules_args, cli_path(image_path)]
     return _run_yara_scan(
         cmd=cmd,
         timeout=adaptive_timeout(image_path, per_gib=300),

@@ -15,6 +15,7 @@ from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     adaptive_timeout,
+    cli_path,
     error_response,
     interpreter_candidates,
     make_tool_call_id,
@@ -139,7 +140,7 @@ def run_plaso(
         l2t_cmd = [*l2t_cmd_prefix, "--storage_file", str(plaso_file), *_L2T_FLAGS]
         if parsers:
             l2t_cmd.extend(["--parsers", parsers])
-        l2t_cmd.append(evidence_path)
+        l2t_cmd.append(cli_path(evidence_path))
 
         plaso_timeout = adaptive_timeout(evidence_path, base=_PLASO_TIMEOUT)
         try:

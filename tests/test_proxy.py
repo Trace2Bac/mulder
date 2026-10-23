@@ -71,7 +71,7 @@ class TestBuildProxyConfig:
 
     def test_config_has_master_key(self) -> None:
         config = _build_proxy_config(["bedrock/test"], 4000)
-        assert config["general_settings"]["master_key"] == "sk-mulder-proxy"
+        assert config["general_settings"]["master_key"] == "os.environ/LITELLM_MASTER_KEY"
 
     def test_drop_params_enabled(self) -> None:
         config = _build_proxy_config(["bedrock/test"], 4000)
@@ -84,8 +84,8 @@ class TestProxyManager:
     def test_env_overrides(self) -> None:
         pm = ProxyManager(models=["bedrock/test"], port=4000)
         overrides = pm.env_overrides
-        assert overrides["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
-        assert overrides["ANTHROPIC_AUTH_TOKEN"] == "sk-mulder-proxy"
+        assert overrides["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4000"
+        assert overrides["ANTHROPIC_AUTH_TOKEN"] == pm._master_key
 
     def test_custom_port(self) -> None:
         pm = ProxyManager(models=["bedrock/test"], port=8080)
@@ -93,6 +93,7 @@ class TestProxyManager:
         assert "8080" in pm.env_overrides["ANTHROPIC_BASE_URL"]
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
+    @patch("mulder.orchestrator.proxy._free_port", MagicMock(side_effect=lambda port: port))
     @patch("mulder.orchestrator.proxy.fetch_model_windows", MagicMock(return_value={}))
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
@@ -106,7 +107,7 @@ class TestProxyManager:
         pm.start()
 
         mock_popen.assert_called_once()
-        mock_health.assert_called_once_with(4000)
+        mock_health.assert_called_once_with(4000, pm._master_key, mock_proc)
         assert pm._process is mock_proc
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")

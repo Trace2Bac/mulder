@@ -666,6 +666,11 @@ _SEQUENTIAL_ONLY: set[str] = {
 }
 
 
+def _is_error_result(result: Any) -> bool:
+    """True for a run_parallel task result that records a failure."""
+    return isinstance(result, dict) and ("error" in result or result.get("status") == "error")
+
+
 @mcp.tool()
 @tool_access(EXECUTORS)
 async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -747,8 +752,11 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     elapsed_ms = (time.monotonic() - t0) * 1000
 
+    # A nested run_parallel answers with its batch_id rather than a tool_call_id.
     sub_call_ids = [
-        r.get("tool_call_id", "") for r in results if isinstance(r, dict) and "tool_call_id" in r
+        str(r.get("tool_call_id") or r.get("batch_id"))
+        for r in results
+        if isinstance(r, dict) and (r.get("tool_call_id") or r.get("batch_id"))
     ]
 
     if has_ctx():
@@ -761,6 +769,8 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             duration_ms=elapsed_ms,
             sub_calls=sub_call_ids,
             batch_id=None,
+            # Nothing ran (every task refused, rejected or failed): not evidence.
+            status="error" if tasks and all(_is_error_result(r) for r in results) else None,
         )
 
     return {

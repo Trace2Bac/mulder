@@ -184,7 +184,6 @@ def parse_browser_history() -> dict[str, object]:
         (r"/Chrome/.*?/History$", "chrome"),
         (r"/Firefox/Profiles/.*?/places\.sqlite$", "firefox"),
         (r"/Safari/History\.db$", "safari"),
-        (r"/Google/Chrome/.*?/History$", "chrome"),
     ]
 
     all_results: list[str] = []
@@ -470,6 +469,7 @@ def list_directory(
             params={"path": path, "recursive": recursive},
             output_hash=hash_output({"error": "not found"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -564,6 +564,7 @@ def read_evidence_file(
             params=params,
             output_hash=hash_output({"error": "not found"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -579,6 +580,7 @@ def read_evidence_file(
             params=params,
             output_hash=hash_output({"error": "not a file"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -604,6 +606,7 @@ def read_evidence_file(
             params=params,
             output_hash=hash_output({"error": "read_failed"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {"tool_call_id": tc_id, "status": "error", "error_message": "Failed to read file"}
 
@@ -1175,6 +1178,7 @@ def detect_timestomping() -> dict[str, object]:
             params={},
             output_hash=hash_output({"error": "no_mft"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -1194,6 +1198,7 @@ def detect_timestomping() -> dict[str, object]:
             params={},
             output_hash=hash_output({"error": "empty_mft"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -1431,6 +1436,7 @@ def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]
             params=params,
             output_hash=hash_output({"error": "no_csv"}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,

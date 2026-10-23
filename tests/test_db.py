@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,13 @@ from mulder.db import (
     _sanitize_fts5_query,
 )
 from mulder.models import Finding, WindowRow
+
+
+def _windows_hash(windows: list[WindowRow]) -> str:
+    h = hashlib.blake2b(digest_size=32)
+    for w in windows:
+        h.update(w.raw_text.encode())
+    return "blake2b:" + h.hexdigest()
 
 
 class TestCaseLifecycle:
@@ -175,6 +183,7 @@ class TestEvidenceIntegrity:
             WindowRow(source_id=sid, line_start=5, line_end=10, event_time=None, raw_text="world"),
         ]
         tmp_case_db.insert_windows(sid, windows)
+        tmp_case_db.set_windows_hash(sid, _windows_hash(windows))
         results = tmp_case_db.verify_evidence_integrity()
         assert len(results) == 1
         assert results[0]["status"] == "verified"
@@ -189,6 +198,7 @@ class TestEvidenceIntegrity:
             ),
         ]
         tmp_case_db.insert_windows(sid, windows)
+        tmp_case_db.set_windows_hash(sid, _windows_hash(windows))
 
         with tmp_case_db._engine.begin() as conn:
             conn.execute(
@@ -565,34 +575,6 @@ class TestCappedWindowsBySources:
         result = tmp_case_db.get_capped_windows_by_sources(["small"], max_per_source=100)
         assert len(result["small"][0]) == 3
         assert result["small"][1] == 3
-
-
-class TestStreamingHash:
-    """Verify that the streaming hash computation produces correct results."""
-
-    def test_hash_consistent_across_batches(self, tmp_case_db: CaseDB) -> None:
-        """Hash after two batch inserts should equal hash of all windows together."""
-        import hashlib
-
-        sid = tmp_case_db.register_source("hash_test", "/p", "h", "ext", 10)
-
-        batch1 = [
-            WindowRow(source_id=sid, line_start=0, line_end=5, event_time=None, raw_text="hello"),
-        ]
-        batch2 = [
-            WindowRow(source_id=sid, line_start=5, line_end=10, event_time=None, raw_text="world"),
-        ]
-        tmp_case_db.insert_windows(sid, batch1)
-        tmp_case_db.insert_windows(sid, batch2)
-
-        sources = tmp_case_db.get_sources()
-        src = next(s for s in sources if s.source_name == "hash_test")
-
-        h = hashlib.blake2b(digest_size=32)
-        h.update(b"hello")
-        h.update(b"world")
-        expected = "blake2b:" + h.hexdigest()
-        assert src.windows_hash == expected
 
 
 class TestUpdateFinding:

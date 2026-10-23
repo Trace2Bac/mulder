@@ -1287,16 +1287,24 @@ def _run_dislocker_decrypt_mode(
         )
 
     mount_point = tempfile.mkdtemp(prefix="mulder_dislocker_")
+    # Keep the user password off argv (world-readable via /proc/<pid>/cmdline):
+    # a bare ``-u`` makes dislocker read it from stdin.  The recovery-password
+    # prompt only reads /dev/tty, so the key stays on argv but in the attached
+    # form, which getopt consumes and dislocker overwrites in place on startup;
+    # a separate ``-p KEY`` token is never parsed as the value nor scrubbed.
     cmd = ["dislocker-fuse"]
+    stdin_input = None
     if recovery_key:
-        cmd.extend(["-p", recovery_key])
+        cmd.append(f"--recovery-password={recovery_key}")
     elif password:
-        cmd.extend(["-u", password])
+        cmd.append("-u")
+        stdin_input = password + "\n"
     cmd.extend(["--", image_path, mount_point])
 
     try:
         proc = subprocess.run(
             cmd,
+            input=stdin_input,
             capture_output=True,
             text=True,
             timeout=TOOL_TIMEOUT,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+from pathlib import Path
 from typing import Any
 
 from mulder.models import Finding
@@ -11,6 +13,7 @@ from mulder.report.ioc_export import (
     _ioc_to_stix_pattern,
     build_csv,
     build_stix_bundle,
+    export_iocs,
 )
 
 
@@ -157,3 +160,21 @@ class TestCsvExport:
         rows = list(reader)
         assert len(rows) == 0
         assert reader.fieldnames == ["type", "value", "context", "severity"]
+
+
+def test_export_excludes_negative_findings(tmp_path: Path) -> None:
+    negative = _make_finding("Ruled out 8.8.8.8 and 1.1.1.1", ["T1047"])
+    negative.title = "[NEGATIVE] C2 hypothesis ruled out"
+    positive = _make_finding("Confirmed C2 to 8.8.8.8", ["T1059"])
+
+    export_iocs("case", [negative, positive], tmp_path)
+
+    rows = list(csv.DictReader(io.StringIO((tmp_path / "case.iocs.csv").read_text())))
+    assert [(row["value"], row["context"]) for row in rows] == [("8.8.8.8", positive.title)]
+    objects = json.loads((tmp_path / "case.iocs.stix.json").read_text())["objects"]
+    assert [obj["name"] for obj in objects if obj["type"] == "indicator"] == ["8.8.8.8"]
+    assert [
+        obj["external_references"][0]["external_id"]
+        for obj in objects
+        if obj["type"] == "attack-pattern"
+    ] == ["T1059"]

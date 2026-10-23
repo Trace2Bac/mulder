@@ -13,9 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from xml.etree.ElementTree import Element
 
 import jinja2
 import markdown
+from markdown.extensions import Extension
+from markdown.treeprocessors import Treeprocessor
 
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import (
@@ -940,7 +943,40 @@ def _clean_finding_description(text: str) -> str:
     return cleaned
 
 
-_MD_EXTENSIONS = ["fenced_code", "tables", "nl2br"]
+_SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto"})
+_URL_SCHEME_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*):")
+_URL_IGNORED_RE = re.compile(r"[\x00-\x20]")
+
+
+def _is_safe_url(url: str) -> bool:
+    """True if *url* is relative or uses an http, https or mailto scheme.
+
+    Browsers drop whitespace and control characters and decode entities
+    before reading the scheme, so ``JaVaScRiPt:``, `` javascript:`` and
+    ``&#106;avascript:`` all mean the same thing. Normalise the same way.
+    """
+    m = _URL_SCHEME_RE.match(_URL_IGNORED_RE.sub("", html.unescape(url)))
+    return m is None or m.group(1).lower() in _SAFE_URL_SCHEMES
+
+
+class _SafeLinkTreeprocessor(Treeprocessor):
+    """Drop ``href``/``src`` values with a scheme outside the allowlist."""
+
+    def run(self, root: Element) -> None:
+        for el in root.iter():
+            for attr in ("href", "src"):
+                value = el.get(attr)
+                if value is not None and not _is_safe_url(value):
+                    del el.attrib[attr]
+
+
+class _SafeLinkExtension(Extension):
+    def extendMarkdown(self, md: markdown.Markdown) -> None:  # noqa: N802 - Markdown API
+        # Below "unescape" (priority 0) so backslash escapes are already restored.
+        md.treeprocessors.register(_SafeLinkTreeprocessor(md), "safe_links", -10)
+
+
+_MD_EXTENSIONS: list[str | Extension] = ["fenced_code", "tables", "nl2br", _SafeLinkExtension()]
 
 
 def _markdown_to_safe_html(text: str) -> str:
@@ -952,6 +988,10 @@ def _markdown_to_safe_html(text: str) -> str:
     registry values, strings carved out of a disk image. Escaping the three
     markup characters first keeps every markdown construct working (they use
     ``*``, ``_``, backticks and brackets) while making ``<script>`` inert.
+
+    Escaping does not reach link targets: ``[x](javascript:...)`` is plain
+    markdown, so ``_SafeLinkExtension`` removes any target whose scheme is
+    not http, https or mailto, keeping the link text.
     """
     if not text:
         return ""

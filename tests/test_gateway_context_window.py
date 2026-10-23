@@ -172,14 +172,14 @@ class TestFetchModelWindows:
             ]
         }
         with patch("urllib.request.urlopen", self._fake_urlopen(payload)) as urlopen:
-            assert fetch_model_windows(4000) == {DEEPSEEK: 163840}
+            assert fetch_model_windows(4000, "k-1") == {DEEPSEEK: 163840}
         req = urlopen.call_args.args[0]
-        assert req.full_url == "http://localhost:4000/model_group/info"
-        assert req.get_header("Authorization") == "Bearer sk-mulder-proxy"
+        assert req.full_url == "http://127.0.0.1:4000/model_group/info"
+        assert req.get_header("Authorization") == "Bearer k-1"
 
     def test_endpoint_failure_is_empty(self) -> None:
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
-            assert fetch_model_windows(4000) == {}
+            assert fetch_model_windows(4000, "k-1") == {}
 
     def test_orchestrator_hands_settings_to_session(self) -> None:
         with patch("mulder.orchestrator.runner.InvestigationDashboard"):

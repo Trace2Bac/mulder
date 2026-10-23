@@ -17,8 +17,6 @@ from xml.etree.ElementTree import Element
 
 import jinja2
 import markdown
-from jinja2.exceptions import SecurityError
-from jinja2.sandbox import SandboxedEnvironment
 from markdown.extensions import Extension
 from markdown.treeprocessors import Treeprocessor
 
@@ -70,6 +68,8 @@ _NON_IOC_IPS = frozenset({"0.0.0.0", "255.255.255.255"})
 
 _FALSE_POSITIVE_RE = re.compile(r"false\s+positive", re.IGNORECASE)
 _IOC_EXCLUDED_SEVERITIES = frozenset({"low", "info"})
+# ``{{name}}`` or ``{{name | length}}`` placeholders in the case narrative.
+_NARRATIVE_PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z_]\w*)\s*(\|\s*length\s*)?\}\}")
 
 
 def _build_enrichment_map(
@@ -1029,34 +1029,38 @@ class ReportRenderer:
 
     @staticmethod
     def _render_narrative_template(narrative: str, ctx: dict[str, Any]) -> str:
-        """Render narrative text as a Jinja2 template with context variables.
+        """Substitute numeric placeholders in the narrative from the report context.
 
-        Treats the narrative as a Jinja2 template string, injecting
-        authoritative numeric values from the report context. Falls back
-        to the raw narrative if rendering fails (e.g., no placeholders
-        or a syntax error).
+        Replaces ``{{name}}`` with an integer context value and
+        ``{{name | length}}`` with the length of a context collection, so
+        the narrative cites authoritative counts. Anything else, including
+        unknown names and other template syntax, is left verbatim.
 
         Args:
-            narrative: Raw narrative text, potentially containing Jinja2
-                template variables like ``{{finding_count}}``.
-            ctx: Report context dictionary providing template variables.
+            narrative: Raw narrative text, potentially containing
+                placeholders like ``{{finding_count}}``.
+            ctx: Report context dictionary providing placeholder values.
 
         Returns:
-            Rendered narrative string, or the original if rendering fails.
+            Narrative string with supported placeholders substituted.
         """
         if not narrative:
             return narrative
-        try:
-            # SandboxedEnvironment, not Environment: the narrative is
-            # model-authored prose summarising attacker-controlled evidence,
-            # and a plain environment would execute
-            # ``{{ cycler.__init__.__globals__ }}`` and everything reachable
-            # from it as the user running the server.
-            env = SandboxedEnvironment(undefined=jinja2.Undefined)
-            template = env.from_string(narrative)
-            return template.render(**ctx)
-        except (jinja2.TemplateError, SecurityError, TypeError, ValueError):
-            return narrative
+
+        # Not a Jinja2 template: the narrative is model-authored prose
+        # summarising attacker-controlled evidence, and even the sandbox
+        # leaves loops, ``**`` and string ``*`` unbounded, so a nested
+        # ``range`` or ``'x' * 10**9`` would wedge report generation.
+        def _substitute(match: re.Match[str]) -> str:
+            value = ctx.get(match.group(1))
+            if match.group(2):
+                if isinstance(value, (list, tuple, dict, set)):
+                    return str(len(value))
+            elif isinstance(value, int) and not isinstance(value, bool):
+                return str(value)
+            return match.group(0)
+
+        return _NARRATIVE_PLACEHOLDER_RE.sub(_substitute, narrative)
 
     def build_context(
         self,

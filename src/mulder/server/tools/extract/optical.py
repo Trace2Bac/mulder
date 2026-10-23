@@ -19,6 +19,7 @@ from mulder.extractors.optical import (
     list_optical,
     raw_image,
 )
+from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.server import source_names as _sn
 from mulder.server.app import get_cfg, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -143,7 +144,18 @@ def extract_optical_file(image_path: str, file_path: str) -> dict[str, object]:
                     f"{file_path!r} is not on the disc. Files: {', '.join(names[:40])}",
                     error_type="file_not_found",
                 )
-            dest = dest_dir / entry.path.strip("/")
+            # On-disc names are untrusted: a Joliet or UDF name may carry "/" and
+            # "..", so the destination must resolve inside dest_dir.
+            try:
+                dest = resolve_allowed_path(dest_dir / entry.path.strip("/"), [dest_dir])
+            except PathPolicyError:
+                return error_response(
+                    tc_id,
+                    "extract_optical_file",
+                    params,
+                    f"{entry.path!r} resolves outside the extraction directory",
+                    error_type="invalid_path",
+                )
             dest.parent.mkdir(parents=True, exist_ok=True)
             written = extract_optical(raw, entry, dest)
     except (OpticalError, OSError) as exc:

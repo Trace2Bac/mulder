@@ -378,6 +378,46 @@ class TestOpticalTools:
         assert missing["error_type"] == "file_not_found"
         assert "/Koala.jpg" in missing["error_message"]
 
+    def test_extract_optical_file_stays_in_extracted(self, tmp_path: Path) -> None:
+        """A Joliet name carrying ``../`` must not write outside ``extracted/``."""
+        from mulder.server.tools.extract.optical import extract_optical_file
+
+        evil = "../../../escaped.txt"
+        img = bytearray(22 * SECTOR)
+        pvd = img[16 * SECTOR : 17 * SECTOR]
+        pvd[0], pvd[1:6], pvd[6] = 1, b"CD001", 1
+        pvd[156:190] = _iso_record(b"\x00", 19, SECTOR, 2)
+        img[16 * SECTOR : 17 * SECTOR] = pvd
+        svd = img[17 * SECTOR : 18 * SECTOR]
+        svd[0], svd[1:6], svd[6] = 2, b"CD001", 1
+        svd[88:91] = b"%/E"
+        svd[156:190] = _iso_record(b"\x00", 19, SECTOR, 2)
+        img[17 * SECTOR : 18 * SECTOR] = svd
+        img[18 * SECTOR] = 255
+        img[18 * SECTOR + 1 : 18 * SECTOR + 6] = b"CD001"
+        root = (
+            _iso_record(b"\x00", 19, SECTOR, 2)
+            + _iso_record(b"\x01", 19, SECTOR, 2)
+            + _iso_record(evil.encode("utf-16-be"), 20, 3, 0)
+        )
+        img[19 * SECTOR : 19 * SECTOR + len(root)] = root
+        img[20 * SECTOR : 20 * SECTOR + 3] = b"abc"
+        disc = tmp_path / "joliet.iso"
+        disc.write_bytes(bytes(img))
+
+        cfg = MagicMock(db_dir=tmp_path / "cases")
+        with (
+            patch(f"{_OPT}.raw_image", side_effect=lambda p: _raw(disc)),
+            patch(f"{_OPT}.get_cfg", return_value=cfg),
+        ):
+            result = extract_optical_file.__wrapped__(  # type: ignore[attr-defined]
+                str(disc), evil
+            )
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "invalid_path"
+        assert not list(tmp_path.rglob("escaped.txt"))
+
 
 def test_catalog_marks_optical_disk_images(tmp_path: Path) -> None:
     from mulder.extractors.classifier import ClassifiedEvidence

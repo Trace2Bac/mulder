@@ -15,7 +15,9 @@ fi
 
 chown -R mulder:mulder "$MULDER_CONFIG" 2>/dev/null || true
 chown -R mulder:mulder "$MULDER_HOME/.mulder" 2>/dev/null || true
-# Ensure the cases directory is writable (may be a bind mount from host)
-chmod -R a+rwX "$MULDER_HOME/.mulder/cases" 2>/dev/null || true
+# Ensure the cases directory is writable (may be a bind mount from host).
+# mulder owns it after the chown above, so owner bits suffice; never grant
+# group/other write on host files (case DBs, reports, audit logs).
+chmod -R u+rwX,go-w "$MULDER_HOME/.mulder/cases" 2>/dev/null || true
 
 exec gosu mulder "$@"

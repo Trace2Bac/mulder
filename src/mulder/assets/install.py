@@ -860,7 +860,7 @@ def _provision_eztools(
 
     On SIFT that is normally ``PECmd`` alone: SIFT ships the rest, its copies
     are version-matched to its own ``dotnet``, and shadowing them with mulder's
-    ``net9`` downloads is a regression rather than an upgrade.  ``--force`` does
+    downloads is a regression rather than an upgrade.  ``--force`` does
     not override that, and a root already holding an unmanaged copy is left
     entirely alone.
     """

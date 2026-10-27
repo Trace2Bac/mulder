@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from mulder.assets.manifest import ASSETS, ASSETS_BY_KEY
+from mulder.assets.manifest import ANY_ARCH, ASSETS, ASSETS_BY_KEY
+from mulder.server.tools.extract import misc
 
 _DOCKERFILE = Path(__file__).resolve().parents[1] / "Dockerfile"
 
@@ -87,3 +88,19 @@ def test_requires_only_names_real_assets() -> None:
 def test_sentinels_are_declared_for_every_asset() -> None:
     """Without one, "already installed" is not decidable."""
     assert all(asset.sentinel for asset in ASSETS)
+
+
+def test_eztools_url_and_runtime_match_the_dockerfile(dockerfile: str) -> None:
+    """The image and ``mulder setup`` fetch one EZ Tools build and run it on one .NET.
+
+    The vendor retired ``net9/`` for ``net/`` (a .NET 10 build), so the manifest
+    URL, the runtime channel and the install hint have to move together.
+    """
+    eztools = ASSETS_BY_KEY["eztools"]
+    channel = re.search(r"dotnet-install\.sh --channel (\d+)\.0 --runtime dotnet", dockerfile)
+
+    assert f"{eztools.urls[ANY_ARCH]}/${{tool}}.zip" in dockerfile
+    assert channel is not None
+    assert eztools.version == f"net{channel.group(1)}"
+    hint = f"--channel {channel.group(1)}.0 --runtime dotnet"
+    assert hint in Path(misc.__file__).read_text(encoding="utf-8")

@@ -179,7 +179,7 @@ def _run_ez_tool(
             error_type="binary_missing",
             suggestion=(
                 "Install the .NET runtime: curl -fsSL https://dot.net/v1/dotnet-install.sh"
-                " | bash -s -- --channel 9.0 --runtime dotnet"
+                " | bash -s -- --channel 10.0 --runtime dotnet"
             ),
         )
 

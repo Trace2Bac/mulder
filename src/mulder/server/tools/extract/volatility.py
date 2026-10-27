@@ -216,7 +216,7 @@ def run_volatility(plugin: str, memory_path: str) -> dict[str, object]:
     multiple plugins since it builds the Volatility context only once.
 
     Indexes output as ``volatility.<plugin>`` source, searchable via
-    search() and get_raw_output().
+    search() and get_raw_output(). A plugin that fails returns an error.
 
     Args:
         plugin: Volatility 3 plugin name (e.g. "windows.pslist.PsList"
@@ -254,6 +254,17 @@ def run_volatility(plugin: str, memory_path: str) -> dict[str, object]:
 
     result = _run_single_vol_plugin(vol_cmd, memory_path, plugin, timeout)
     elapsed = (time.monotonic() - t0) * 1000
+    if result.get("status") == "error":
+        suggestion = result.get("suggestion")
+        return error_response(
+            tc_id,
+            "run_volatility",
+            params,
+            str(result.get("error_message") or f"{plugin} failed"),
+            elapsed,
+            error_type=str(result.get("error_type", "unknown")),
+            suggestion=str(suggestion) if suggestion else None,
+        )
     source_name = result.get("source_name")
     return tool_response(
         tc_id,
@@ -556,6 +567,18 @@ def _aggregate_batch_results(
         payload["execution_mode"] = "subprocess_fallback"
 
     elapsed = (time.monotonic() - t0) * 1000
+    if results and failed == len(results):
+        # Every plugin failed and nothing was indexed: not evidence.
+        response = error_response(
+            tc_id,
+            "run_volatility_batch",
+            params,
+            f"All {len(results)} plugins failed; see results.per_plugin",
+            elapsed,
+            error_type="all_plugins_failed",
+        )
+        response["results"] = payload
+        return response
     return tool_response(
         tc_id,
         "run_volatility_batch",
@@ -627,7 +650,8 @@ def run_volatility_batch(
 
     Each plugin indexes as ``volatility.<plugin>`` (e.g.
     ``volatility.pslist``). Use via start_extraction_batch for background
-    execution, or call directly for foreground runs.
+    execution, or call directly for foreground runs. When every plugin
+    fails, the call returns an error with the per-plugin results.
 
     Args:
         plugins: List of plugin names. Recommended full set for thorough

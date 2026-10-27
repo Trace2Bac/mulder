@@ -257,13 +257,14 @@ _ASSETS: tuple[Asset, ...] = (
     ),
     Asset(
         key="eztools",
-        version="net9",
+        version="net10",
         kind="eztools",
-        urls={ANY_ARCH: "https://download.ericzimmermanstools.com/net9"},
+        urls={ANY_ARCH: "https://download.ericzimmermanstools.com/net"},
         dest=("zimmermantools",),
         sentinel=("PECmd.dll",),
         # The vendor URL carries no version at all, so there is nothing stable
-        # to pin; it always serves the current build.
+        # to pin; it always serves the current build.  ``version`` names the
+        # .NET that build targets, which the Dockerfile's runtime must match.
         pinnable=False,
         size_estimate=20 * _MB,
         members=(

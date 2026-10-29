@@ -268,24 +268,45 @@ _ANDROID_ARTIFACTS: dict[str, dict[str, object]] = {
 }
 
 
-def _query_sqlite_safe(db_path: Path, query: str) -> list[str]:
-    """Run a read-only query, returning formatted rows or empty list on error."""
+def _query_sqlite_safe(db_path: Path, query: str) -> tuple[list[str], str | None]:
+    """Run a read-only query, returning ``(rows, None)`` or ``([], error)``."""
     try:
         conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query).fetchall()
         conn.close()
-    except sqlite3.Error:
-        return []
+    except sqlite3.Error as exc:
+        return [], str(exc) or type(exc).__name__
 
     if not rows:
-        return []
+        return [], None
 
     columns = rows[0].keys()
     lines = ["\t".join(columns)]
     for r in rows:
         lines.append("\t".join(str(r[c]) for c in columns))
-    return lines
+    return lines, None
+
+
+def _unreadable_error(
+    tc_id: str,
+    tool_name: str,
+    params: Mapping[str, object],
+    unreadable: list[dict[str, str]],
+    elapsed_ms: float,
+) -> dict[str, object]:
+    """Error for a run in which no database it found could be queried."""
+    response = error_response(
+        tc_id,
+        tool_name,
+        params,
+        f"Found {len(unreadable)} database(s) but could not query any; see unreadable_databases",
+        elapsed_ms,
+        error_type="database_unreadable",
+        suggestion="Check the database schema and encryption.",
+    )
+    response["unreadable_databases"] = unreadable
+    return response
 
 
 def _find_databases(search_dir: Path, db_names: list[str]) -> list[Path]:
@@ -364,6 +385,8 @@ def parse_android_artifacts(
     try:
         all_results: list[str] = []
         parsed_types: list[str] = []
+        unreadable: list[dict[str, str]] = []
+        queried = False
 
         for atype in types_to_parse:
             spec = _ANDROID_ARTIFACTS[atype]
@@ -381,7 +404,13 @@ def parse_android_artifacts(
                 db_files = _find_databases(search_dir, db_names)
 
             for db_path in db_files:
-                lines = _query_sqlite_safe(db_path, str(query))
+                lines, error = _query_sqlite_safe(db_path, str(query))
+                if error is not None:
+                    unreadable.append(
+                        {"artifact_type": atype, "database": db_path.name, "error": error}
+                    )
+                    continue
+                queried = True
                 if lines:
                     header = f"=== {spec['label']} ({db_path.name}) ==="
                     all_results.append(header + "\n" + "\n".join(lines))
@@ -397,12 +426,23 @@ def parse_android_artifacts(
                 "android_parser",
             )
             index_result["parsed_types"] = parsed_types
+        elif unreadable and not queried:
+            return _unreadable_error(
+                tc_id,
+                "parse_android_artifacts",
+                params,
+                unreadable,
+                (time.monotonic() - t0) * 1000,
+            )
         else:
             index_result = {
                 "status": "no_results",
                 "message": "No Android artifacts found",
                 "searched_types": types_to_parse,
             }
+        if unreadable:
+            index_result["unreadable_count"] = len(unreadable)
+            index_result["unreadable_databases"] = unreadable
 
     finally:
         if cleanup_tmpdir:
@@ -571,6 +611,8 @@ def parse_ios_artifacts(
 
     all_results: list[str] = []
     parsed_types: list[str] = []
+    unreadable: list[dict[str, str]] = []
+    queried = False
 
     with tempfile.TemporaryDirectory(prefix="mulder_ios_") as tmpdir:
         for atype in types_to_parse:
@@ -591,7 +633,11 @@ def parse_ios_artifacts(
             if db_path is None or not db_path.exists():
                 continue
 
-            lines = _query_sqlite_safe(db_path, str(spec["query"]))
+            lines, error = _query_sqlite_safe(db_path, str(spec["query"]))
+            if error is not None:
+                unreadable.append({"artifact_type": atype, "database": db_name, "error": error})
+                continue
+            queried = True
             if lines:
                 header = f"=== {spec['label']} ({spec['db_name']}) ==="
                 all_results.append(header + "\n" + "\n".join(lines))
@@ -607,6 +653,10 @@ def parse_ios_artifacts(
         )
         index_result["parsed_types"] = parsed_types
         index_result["manifest_found"] = has_manifest
+    elif unreadable and not queried:
+        return _unreadable_error(
+            tc_id, "parse_ios_artifacts", params, unreadable, (time.monotonic() - t0) * 1000
+        )
     else:
         index_result = {
             "status": "no_results",
@@ -614,6 +664,9 @@ def parse_ios_artifacts(
             "searched_types": types_to_parse,
             "manifest_found": has_manifest,
         }
+    if unreadable:
+        index_result["unreadable_count"] = len(unreadable)
+        index_result["unreadable_databases"] = unreadable
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(

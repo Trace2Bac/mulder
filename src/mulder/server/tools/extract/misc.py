@@ -673,6 +673,17 @@ def run_clamav(target_path: str) -> dict[str, object]:
     except subprocess.TimeoutExpired:
         return error_response(tc_id, "run_clamav", params, "clamscan timed out")
 
+    if proc.returncode != 0 and not proc.stdout.strip():
+        detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[:_PREVIEW_CHAR_LIMIT]
+        return error_response(
+            tc_id,
+            "run_clamav",
+            params,
+            f"clamscan exited {proc.returncode} and produced no output: {detail}",
+            (time.monotonic() - t0) * 1000,
+            error_type="tool_failed",
+        )
+
     output = proc.stdout.strip()
     infected_lines = [line for line in output.splitlines() if "FOUND" in line]
     summary_text = "\n".join(infected_lines) if infected_lines else output

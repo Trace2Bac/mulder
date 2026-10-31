@@ -207,6 +207,18 @@ class TestIos:
             _entry("sms", "sms.db", "no such table: message")
         ]
 
+    def test_an_unreadable_manifest_is_reported(self, ctx: MagicMock, tmp_path: Path) -> None:
+        (tmp_path / "Manifest.db").write_bytes(os.urandom(4096))
+        _db(tmp_path / SMS_FILE_ID[:2] / SMS_FILE_ID, "CREATE TABLE message(text TEXT);")
+
+        result = _ios(tmp_path, artifact_types=["sms"])
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "database_unreadable"
+        assert result["unreadable_databases"] == [
+            _entry("manifest", "Manifest.db", "file is not a database")
+        ]
+
     def test_unreadable_databases_are_listed_next_to_the_parsed_ones(
         self, ctx: MagicMock, tmp_path: Path
     ) -> None:

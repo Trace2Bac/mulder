@@ -531,23 +531,24 @@ _IOS_MANIFEST_ARTIFACTS: dict[str, dict[str, object]] = {
 }
 
 
-def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
+def _resolve_ios_manifest(backup_dir: Path) -> tuple[dict[str, Path], str | None]:
     """Parse Manifest.db to map file IDs to actual paths on disk.
 
     iTunes/Finder backups store files named by their SHA1 hash in
     two-character subdirectories (e.g. ``3d/3d0d7e5f...``).
+    Returns ``(mapping, None)`` or ``({}, error)``.
     """
     manifest = backup_dir / "Manifest.db"
     if not manifest.exists():
-        return {}
+        return {}, None
 
     mapping: dict[str, Path] = {}
     try:
         conn = sqlite3.connect(readonly_sqlite_uri(manifest), uri=True)
         rows = conn.execute("SELECT fileID, relativePath, domain FROM Files").fetchall()
         conn.close()
-    except sqlite3.Error:
-        return {}
+    except sqlite3.Error as exc:
+        return {}, str(exc) or type(exc).__name__
 
     for file_id, _rel_path, _domain in rows:
         candidate = backup_dir / file_id[:2] / file_id
@@ -557,7 +558,7 @@ def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
         if flat_candidate.exists():
             mapping[file_id] = flat_candidate
 
-    return mapping
+    return mapping, None
 
 
 @mcp.tool()
@@ -606,12 +607,16 @@ def parse_ios_artifacts(
             error_type="invalid_argument",
         )
 
-    manifest_map = _resolve_ios_manifest(target)
+    manifest_map, manifest_error = _resolve_ios_manifest(target)
     has_manifest = bool(manifest_map)
 
     all_results: list[str] = []
     parsed_types: list[str] = []
     unreadable: list[dict[str, str]] = []
+    if manifest_error is not None:
+        unreadable.append(
+            {"artifact_type": "manifest", "database": "Manifest.db", "error": manifest_error}
+        )
     queried = False
 
     with tempfile.TemporaryDirectory(prefix="mulder_ios_") as tmpdir:
